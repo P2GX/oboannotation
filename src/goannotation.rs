@@ -1,3 +1,4 @@
+use flate2::bufread::GzDecoder;
 use num::Integer;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -313,9 +314,11 @@ fn process_annotation_line(line: &str) -> Result<GoAnnot, InputError> {
 }
 
 
-pub fn process_file(path: String) -> Result<String, String> {
-    let file = File::open(&path).map_err(|e| format!("Failed to open file: {}", e))?;
-    let reader = BufReader::new(file);
+pub fn process_file(path: &str) -> Result<String, String> {
+    let file = File::open(path).expect("Could not open goa file"); // todo better error handling
+    let buf_reader = BufReader::new(file); 
+    let decoder = GzDecoder::new(buf_reader); 
+    let reader = BufReader::new(decoder); 
 
     let mut annotations = vec![];
     let mut annotation_stats: Vec<AnnotationStat> = vec![];

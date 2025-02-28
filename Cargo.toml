@@ -1,9 +1,18 @@
 [package]
 name = "oboannotation"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
+
+[[bin]]
+name = "demo"
+path = "bin/demo.rs"
 
 [dependencies]
 serde_json = "1.0.114"
 serde = { version = "1.0.197", features = ["derive"] }
 num = "0.4"
+flate2 = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+
+[dev-dependencies]
+clap = { version = "4.5", features = ["derive"] }

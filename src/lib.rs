@@ -1,4 +1,4 @@
-mod goannotation;
+pub mod goannotation;
 
 
 pub fn add(left: u64, right: u64) -> u64 {
