@@ -1,4 +1,5 @@
 pub mod goannotation;
+pub mod go_relation;
 
 
 pub fn add(left: u64, right: u64) -> u64 {

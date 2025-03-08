@@ -1,6 +1,6 @@
 [package]
 name = "oboannotation"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 
 [[bin]]
@@ -8,11 +8,12 @@ name = "demo"
 path = "bin/demo.rs"
 
 [dependencies]
-serde_json = "1.0.114"
+serde_json = "1.0.140"
 serde = { version = "1.0.197", features = ["derive"] }
 num = "0.4"
 flate2 = "1.0"
 clap = { version = "4.5", features = ["derive"] }
+ontolius = "0.4.2"
 
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive"] }

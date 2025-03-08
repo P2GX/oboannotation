@@ -1,124 +1,19 @@
 use flate2::bufread::GzDecoder;
 use num::Integer;
+use ontolius::base::TermId;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::str::FromStr;
 
+use crate::go_relation::GoTermRelation;
 
-#[derive(Debug)]
-pub enum InputError {
-    NegatedAnnotation, // we skip negated annotations
-    MalformedLine(String),
-    ParsingError(String), // Another error type
-                          // Add other error kinds as needed
-}
-
-impl std::fmt::Display for InputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match *self {
-            InputError::NegatedAnnotation => write!(f, "Negated annotation detected"),
-            InputError::MalformedLine(ref s) => write!(f, "Malformed line: {}", s),
-            InputError::ParsingError(ref s) => write!(f, "Parsing error: {}", s),
-        }
-    }
-}
-
-
-
-/// Gene product to GO term relations
-/// enables links a gene product to a Molecular Function it executes.
-/// contributes to links a gene product to a Molecular Function executed by a macromolecular complex, in which the Molecular Function cannot be ascribed to an individual subunit of that complex. Only the complex subunits required for the Molecular Function are annotated to the Molecular Function term with ‘contributes to’.
-/// Relations between a gene product and a Biological Process:
-/// involved in links a gene product and a Biological Process in which the gene product’s Molecular Function plays an integral role.
-/// acts upstream of or within links a gene product and a Biological Process when the mechanism relating the gene product’s activity to the Biological Process is not known.
-/// Relations between a gene product and a Cellular Component:
-/// is active in links a gene product to the cellular location in which it enables its Molecular Function.
-/// located in links a gene product and the Cellular Component, specifically a cellular anatomical anatomy or virion component, in which a gene product has been detected.
-/// part of links a gene product and a protein-containing complex.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
-enum GoTermRelation {
-    Enables,
-    ContributesTo,
-    InvolvedIn,
-    ActsUpstreamOf,
-    ActsWithin,
-    ActsUpstreamOfOrWithin,
-    ActsUpstreamOfNegativeEffect,
-    ActsUpstreamOfPositiveEffect,
-    ActsUpstreamOfOrWithinNegativeEffect,
-    ActsUpstreamOfOrWithinPositiveEffect,
-    IsActiveIn,
-    LocatedIn,
-    ColocalizesWith,
-    PartOf,
-}
-
-impl std::fmt::Display for GoTermRelation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let relation_str = match self {
-            GoTermRelation::Enables => "enables",
-            GoTermRelation::ContributesTo => "contributes_to",
-            GoTermRelation::InvolvedIn => "involved_in",
-            GoTermRelation::ActsUpstreamOf => "acts_upstream_of",
-            GoTermRelation::ActsWithin => "acts_within",
-            GoTermRelation::IsActiveIn => "is_active_in",
-            GoTermRelation::ActsUpstreamOfOrWithin => "acts_upstream_of_or_within",
-            GoTermRelation::ActsUpstreamOfNegativeEffect => "acts_upstream_of_negative_effect",
-            GoTermRelation::ActsUpstreamOfPositiveEffect => "acts_upstream_of_positive_effect",
-            GoTermRelation::ActsUpstreamOfOrWithinNegativeEffect => {
-                "acts_upstream_of_or_within_negative_effect"
-            }
-            GoTermRelation::ActsUpstreamOfOrWithinPositiveEffect => {
-                "acts_upstream_of_or_within_positive_effect"
-            }
-            GoTermRelation::LocatedIn => "located_in",
-            GoTermRelation::PartOf => "part_of",
-            GoTermRelation::ColocalizesWith => "colocalizes_with",
-        };
-        write!(f, "{}", relation_str)
-    }
-}
-
-impl FromStr for GoTermRelation {
-    type Err = InputError;
-
-    fn from_str(s: &str) -> Result<Self, InputError> {
-        if s.starts_with("NOT") {
-            return Err(InputError::NegatedAnnotation);
-        }
-        match s {
-            "enables" => Ok(GoTermRelation::Enables),
-            "contributes_to" => Ok(GoTermRelation::ContributesTo),
-            "involved_in" => Ok(GoTermRelation::InvolvedIn),
-            "located_in" => Ok(GoTermRelation::LocatedIn),
-            "acts_upstream_of" => Ok(GoTermRelation::ActsUpstreamOf),
-            "acts_within" => Ok(GoTermRelation::ActsWithin),
-            "acts_upstream_of_or_within" => Ok(GoTermRelation::ActsUpstreamOfOrWithin),
-            "acts_upstream_of_negative_effect" => Ok(GoTermRelation::ActsUpstreamOfNegativeEffect),
-            "acts_upstream_of_positive_effect" => Ok(GoTermRelation::ActsUpstreamOfPositiveEffect),
-            "acts_upstream_of_or_within_negative_effect" => {
-                Ok(GoTermRelation::ActsUpstreamOfOrWithinNegativeEffect)
-            }
-            "acts_upstream_of_or_within_positive_effect" => {
-                Ok(GoTermRelation::ActsUpstreamOfOrWithinPositiveEffect)
-            }
-            "is_active_in" => Ok(GoTermRelation::IsActiveIn),
-            "part_of" => Ok(GoTermRelation::PartOf),
-            "colocalizes_with" => Ok(GoTermRelation::ColocalizesWith),
-            _ => Err(InputError::ParsingError(format!(
-                "Did not recognize '{}' as a GOA relation.",
-                s
-            ))),
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 enum EviCode {
     EXP,           // inferred from experiment
-    HTP,           //  Inferred from High Throughput Experiment
+    HTP,           // Inferred from High Throughput Experiment
     PHYLO,         // Phylogenetically inferred annotations
     COMPUTATIONAL, // computational analysis evidence codes i
     AUTHOR,        // Author statement evidence
@@ -128,9 +23,9 @@ enum EviCode {
 }
 
 impl FromStr for EviCode {
-    type Err = InputError;
+    type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, InputError> {
+    fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "EXP" | "IDA" | "IPI" | "IMP" | "IGI" | "IEP" => Ok(EviCode::EXP),
             "HTP" | "HDA" | "HMP" | "HGI" | "HEP" => Ok(EviCode::HTP),
@@ -140,10 +35,10 @@ impl FromStr for EviCode {
             "IC" => Ok(EviCode::IC),
             "ND" => Ok(EviCode::ND),
             "IEA" => Ok(EviCode::IEA),
-            _ => Err(InputError::ParsingError(format!(
+            _ => Err(format!(
                 "Did not recognize '{}' as EvidenceCode.",
                 s
-            ))),
+            )),
         }
     }
 }
@@ -155,52 +50,22 @@ enum Aspect {
 }
 
 impl FromStr for Aspect {
-    type Err = InputError;
+    type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, InputError> {
+    fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "F" => Ok(Aspect::F),
             "P" => Ok(Aspect::P),
             "C" => Ok(Aspect::C),
-            _ => Err(InputError::ParsingError(format!(
+            _ => Err(format!(
                 "Did not recognize '{}' as Aspect.",
                 s
-            ))),
+            )),
         }
     }
 }
 
-/// Simple structure to represent a Gene Ontology or other Term identifier
-///
-/// We do not care much about the format of the ids, only that they are valid CURIEs. 
-#[derive(Serialize, Clone, Debug, PartialEq)]
-pub struct TermId {
-    pub value: String,
-}
 
-impl TermId {
-    pub fn new(prfx: &str, id: &str) -> Result<Self, InputError> {
-        if prfx.contains(":") {
-            return Err(InputError::ParsingError(format!("Prefix not allowed to contain colon - '{}'", prfx)));
-        }
-        if id.contains(":") {
-            return Err(InputError::ParsingError(format!("TermId suffix (id) not allowed to contain colon - '{}'", id)));
-        }
-        Ok(TermId {value: format!("{}:{}", prfx, id)})
-    }
-
-    pub fn from_curie(curie: &str) -> Result<Self, InputError> {
-        let tokens: Vec<&str> = curie.split(':').collect();
-        if tokens.iter().count() != 2 {
-            return Err(InputError::ParsingError(format!(
-                "CURIE expected to have 2 fields, but had {} fields: {}",
-                tokens.iter().count(),
-                curie
-            )));
-        }
-        TermId::new(tokens[0], tokens[1])
-    }
-}
 
 /// A Gene Ontology Annotation, corresponding to one line of the GOA file
 /// 
@@ -233,12 +98,12 @@ impl GoAnnot {
             aspect: aspect,
         }
     }
+    /// A negated annotation in GO means the gene product does not have the annotation in question
+    pub fn is_negated(&self) -> bool {
+        return self.relation == GoTermRelation::NegatedAnnotation;
+    }
 }
 
-struct GoAnnotations {
-    annotation_list: Vec<GoAnnot>,
-    version: String,
-}
 
 /// To be used for serialization to display the most interesting characteristics of the annotation as a table
 #[derive(Serialize)]
@@ -284,81 +149,133 @@ fn annotation_descriptive_stats(go_annots: &Vec<GoAnnot>) -> Vec<AnnotationStat>
     annots
 }
 
-const GOA_EXPECTED_FIELDS: usize = 17;
 
-/// Process a line in go-annotation-file-gaf-format-2.2
-fn process_annotation_line(line: &str) -> Result<GoAnnot, InputError> {
-    let tokens: Vec<&str> = line.split('\t').collect();
-    if tokens.iter().count() != GOA_EXPECTED_FIELDS {
-        return Err(InputError::MalformedLine(format!(
-            "GOA lines expected to have {} fields, but line had {} fields: {}",
-            GOA_EXPECTED_FIELDS,
-            tokens.iter().count(),
-            line
-        )));
-    }
-    let gene_product_id = TermId::new(tokens[0], tokens[1])?;
-    let symbol = tokens[2];
-    let relation = GoTermRelation::from_str(tokens[3])?; // return on error immediately
-    let go_id = TermId::from_curie(tokens[4])?; // return on error immediately
-    let evidence = EviCode::from_str(tokens[6])?; // return on error immediately
-    let aspect = Aspect::from_str(tokens[8])?; // return on error immediately
-    Ok(GoAnnot::new(
-        gene_product_id,
-        symbol,
-        relation,
-        go_id,
-        evidence,
-        aspect,
-    ))
+
+pub struct GoAnnotations {
+    annotation_list: Vec<GoAnnot>,
+    version: String,
 }
 
 
-pub fn process_file(path: &str) -> Result<String, String> {
-    let file = File::open(path).expect("Could not open goa file"); // todo better error handling
-    let buf_reader = BufReader::new(file); 
-    let decoder = GzDecoder::new(buf_reader); 
-    let reader = BufReader::new(decoder); 
+impl GoAnnotations {
 
-    let mut annotations = vec![];
-    let mut annotation_stats: Vec<AnnotationStat> = vec![];
-    let mut num_negated_annos = 0;
-    let mut parsed_date = false; // The GOA format has multiple entries for date-generated. We only want the first
-    for line in reader.lines() {
-        match line {
-            Ok(content) => {
-                if content.starts_with("!") {
-                    //print!("{}", content);
-                    if content.starts_with("!date-generated: ") && ! parsed_date {
-                        let date_gen = &content[("!date-generated: ".len() + 2)..];
-                        parsed_date = true;
-                        annotation_stats
-                            .push(AnnotationStat::from_string("version", date_gen));
+    const GOA_EXPECTED_FIELDS: usize = 17;
+
+    pub fn new(path: &str) -> Result<Self, String> {
+        let file = File::open(path).expect("Could not open goa file"); // todo better error handling
+        let buf_reader = BufReader::new(file); 
+        let decoder = GzDecoder::new(buf_reader); 
+        let reader = BufReader::new(decoder); 
+        let mut annotations = vec![];
+        let mut parsed_date = false; // The GOA format has multiple entries for date-generated. We only want the first
+        let mut version: String = "unknown".to_string();
+        for line in reader.lines() {
+            match line {
+                Ok(content) => {
+                    if content.starts_with("!") {
+                        if content.starts_with("!date-generated: ") && ! parsed_date {
+                            let date_gen = &content[("!date-generated: ".len() + 2)..];
+                            version = date_gen.to_string();
+                            parsed_date = true;
+                        }
+                    } else {
+                        let goann = Self::process_annotation_line(&content);
+                        match goann {
+                            Ok(go_annotation) => annotations.push(go_annotation),
+                            Err(e) => println!("{}", e),
+                        }
                     }
-                } else {
-                    let goann = process_annotation_line(&content);
-                    match goann {
-                        Ok(go_annotation) => annotations.push(go_annotation),
-                        Err(e) => match &e {
-                            InputError::NegatedAnnotation => num_negated_annos += 1,
-                            other => println!("{}", other),
-                        },
-                    }
-                }
+                },
+                Err(e) => return Err(format!("Error reading file: {}", e)),
             }
-            Err(e) => return Err(format!("Error reading file: {}", e)),
         }
+        print!("Parsed {} annotations", annotations.len());
+        Ok(Self {
+            annotation_list: annotations,
+            version: version
+        })
     }
-    print!("Parsed {} annotations", annotations.len());
-    annotation_stats.push(AnnotationStat::from_int(
-        "Negated annotations",
-        num_negated_annos,
-    ));
+
+
+
+    /// Process a line in go-annotation-file-gaf-format-2.2
+    fn process_annotation_line(line: &str) -> Result<GoAnnot, String> {
+        let tokens: Vec<&str> = line.split('\t').collect();
+        if tokens.iter().count() != Self::GOA_EXPECTED_FIELDS {
+            return Err(format!(
+                "GOA lines expected to have {} fields, but line had {} fields: {}",
+                Self::GOA_EXPECTED_FIELDS,
+                tokens.iter().count(),
+                line
+            ));
+        }
+        let gene_product_id: TermId = (tokens[0], tokens[1]).into(); // Ontolius TermId
+        let symbol = tokens[2];
+        let relation = GoTermRelation::from_str(tokens[3])?; // return on error immediately
+        let go_id = TermId::from_str(tokens[4]).unwrap(); // return on error immediately
+        let evidence = EviCode::from_str(tokens[6])?; // return on error immediately
+        let aspect = Aspect::from_str(tokens[8])?; // return on error immediately
+        Ok(GoAnnot::new(
+            gene_product_id,
+            symbol,
+            relation,
+            go_id,
+            evidence,
+            aspect,
+        ))
+    }
+
+
+    pub fn get_annotation_stats(&self) -> Vec<AnnotationStat> {
+        let mut annotation_stats: Vec<AnnotationStat> = vec![];
+        annotation_stats.push(AnnotationStat::from_string("version", &self.version));
+        let annot_count = annotation_stats.len();
+        annotation_stats.push(AnnotationStat::from_int("Total annotations", annot_count));
+        let unique_symbols: HashSet<_> = self.annotation_list
+            .iter()
+            .map(|annot| &annot.gene_product_symbol)
+            .collect();
+        annotation_stats.push(AnnotationStat::from_int("genes", unique_symbols.len()));
+        // Count relation types
+        let mut relation_counts = HashMap::new();
     
-    let stats_counts = annotation_descriptive_stats(&annotations);
-    annotation_stats.extend(stats_counts);
-    serde_json::to_string(&annotation_stats).map_err(|e| format!("Serialization error: {}", e))
+        for annot in &self.annotation_list {
+            *relation_counts.entry(annot.relation.clone()).or_insert(0) += 1;
+        }
+        for (relation, count) in &relation_counts {
+            annotation_stats.push(AnnotationStat::from_int(&relation.to_string(), *count));
+        }
+        
+        annotation_stats
+    }
+
+    pub fn get_annotation_statistics_json(&self) -> Result<String, String> {
+        let annot_stats = self.get_annotation_stats();
+        serde_json::to_string(&annot_stats).map_err(|e| format!("Serialization error: {}", e))
+    }
+
+    pub fn get_annotation_map(&self) -> HashMap<String, HashSet<TermId>> {
+        let mut annot_map = HashMap::new();
+        for annot in &self.annotation_list {
+            if annot.is_negated() {
+                continue;
+            }
+            let symbol = annot.gene_product_symbol.clone();
+            let tid = annot.go_id.clone();
+            // Insert into HashMap, creating a new HashSet if necessary
+            annot_map
+                .entry(symbol) 
+                .or_insert_with(|| HashSet::new())  
+                .insert(tid);  //
+        }
+
+        annot_map
+    }
+    
 }
+
+
+
 
 #[cfg(test)]
 mod test {
