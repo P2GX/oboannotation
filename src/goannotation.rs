@@ -1,7 +1,8 @@
 use flate2::bufread::GzDecoder;
-use num::Integer;
+use ontolius::TermId;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::str::FromStr;
@@ -15,7 +16,7 @@ pub enum InputError {
                           // Add other error kinds as needed
 }
 
-impl std::fmt::Display for InputError {
+impl Display for InputError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match *self {
             InputError::NegatedAnnotation => write!(f, "Negated annotation detected"),
@@ -55,7 +56,7 @@ enum GoTermRelation {
     PartOf,
 }
 
-impl std::fmt::Display for GoTermRelation {
+impl Display for GoTermRelation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let relation_str = match self {
             GoTermRelation::Enables => "enables",
@@ -170,38 +171,6 @@ impl FromStr for Aspect {
     }
 }
 
-/// Simple structure to represent a Gene Ontology or other Term identifier
-///
-/// We do not care much about the format of the ids, only that they are valid CURIEs. 
-#[derive(Serialize, Clone, Debug, PartialEq)]
-pub struct TermId {
-    pub value: String,
-}
-
-impl TermId {
-    pub fn new(prfx: &str, id: &str) -> Result<Self, InputError> {
-        if prfx.contains(":") {
-            return Err(InputError::ParsingError(format!("Prefix not allowed to contain colon - '{}'", prfx)));
-        }
-        if id.contains(":") {
-            return Err(InputError::ParsingError(format!("TermId suffix (id) not allowed to contain colon - '{}'", id)));
-        }
-        Ok(TermId {value: format!("{}:{}", prfx, id)})
-    }
-
-    pub fn from_curie(curie: &str) -> Result<Self, InputError> {
-        let tokens: Vec<&str> = curie.split(':').collect();
-        if tokens.iter().count() != 2 {
-            return Err(InputError::ParsingError(format!(
-                "CURIE expected to have 2 fields, but had {} fields: {}",
-                tokens.iter().count(),
-                curie
-            )));
-        }
-        TermId::new(tokens[0], tokens[1])
-    }
-}
-
 /// A Gene Ontology Annotation, corresponding to one line of the GOA file
 /// 
 /// We only store a subset of the information that is important for the analysis
@@ -255,10 +224,12 @@ impl AnnotationStat {
         }
     }
 
-    pub fn from_int<T: Integer + std::fmt::Display>(item: &str, val: T) -> Self {
+    pub fn from_int<T>(item: &str, val: T) -> Self
+        where T: Display
+    {
         AnnotationStat {
             key: item.to_string(),
-            value: format!("{}", val),
+            value: val.to_string(),
         }
     }
 }
@@ -289,18 +260,21 @@ const GOA_EXPECTED_FIELDS: usize = 17;
 /// Process a line in go-annotation-file-gaf-format-2.2
 fn process_annotation_line(line: &str) -> Result<GoAnnot, InputError> {
     let tokens: Vec<&str> = line.split('\t').collect();
-    if tokens.iter().count() != GOA_EXPECTED_FIELDS {
+    if tokens.len() != GOA_EXPECTED_FIELDS {
         return Err(InputError::MalformedLine(format!(
             "GOA lines expected to have {} fields, but line had {} fields: {}",
             GOA_EXPECTED_FIELDS,
-            tokens.iter().count(),
+            tokens.len(),
             line
         )));
     }
-    let gene_product_id = TermId::new(tokens[0], tokens[1])?;
+    let gene_product_id = TermId::from((tokens[0], tokens[1]));
     let symbol = tokens[2];
     let relation = GoTermRelation::from_str(tokens[3])?; // return on error immediately
-    let go_id = TermId::from_curie(tokens[4])?; // return on error immediately
+    let go_id = match tokens[4].parse() {
+        Ok(t) => t,
+        Err(e) => return Err(InputError::ParsingError(format!("Error: {e:?}"))),
+    }; // return on error immediately
     let evidence = EviCode::from_str(tokens[6])?; // return on error immediately
     let aspect = Aspect::from_str(tokens[8])?; // return on error immediately
     Ok(GoAnnot::new(
