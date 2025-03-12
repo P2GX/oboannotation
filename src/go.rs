@@ -1,12 +1,19 @@
-use flate2::bufread::GzDecoder;
+//! Parse Gene Ontology annotations.
+//!
+//! Use [`GoGafAnnotationLoader`] to parse GAF file into [`GoAnnotations`].
+use anyhow::bail;
 use ontolius::TermId;
-use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::error::Error;
 use std::fmt::Display;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::str::FromStr;
 
+use crate::io::AnnotationLoader;
+
+/// The number of columns in GO GAF file.
+const GOA_EXPECTED_FIELDS: usize = 17;
 
 #[derive(Debug)]
 pub enum InputError {
@@ -26,7 +33,7 @@ impl Display for InputError {
     }
 }
 
-
+impl Error for InputError {}
 
 /// Gene product to GO term relations
 /// enables links a gene product to a Molecular Function it executes.
@@ -38,8 +45,9 @@ impl Display for InputError {
 /// is active in links a gene product to the cellular location in which it enables its Molecular Function.
 /// located in links a gene product and the Cellular Component, specifically a cellular anatomical anatomy or virion component, in which a gene product has been detected.
 /// part of links a gene product and a protein-containing complex.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
-enum GoTermRelation {
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum GoTermRelation {
     Enables,
     ContributesTo,
     InvolvedIn,
@@ -116,12 +124,13 @@ impl FromStr for GoTermRelation {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-enum EviCode {
-    EXP,           // inferred from experiment
-    HTP,           //  Inferred from High Throughput Experiment
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum EviCode {
+    EXP,           // Inferred from experiment
+    HTP,           // Inferred from High Throughput Experiment
     PHYLO,         // Phylogenetically inferred annotations
-    COMPUTATIONAL, // computational analysis evidence codes i
+    COMPUTATIONAL, // Computational analysis evidence codes i
     AUTHOR,        // Author statement evidence
     IC,            // Curator statement
     ND,            // No biological Data available
@@ -148,10 +157,15 @@ impl FromStr for EviCode {
         }
     }
 }
-#[derive(Serialize, Clone)]
-enum Aspect {
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum Aspect {
+    /// Molecular function.
     F,
+    /// Biological process.
     P,
+    /// Cellular component.
     C,
 }
 
@@ -172,93 +186,138 @@ impl FromStr for Aspect {
 }
 
 /// A Gene Ontology Annotation, corresponding to one line of the GOA file
-/// 
+///
 /// We only store a subset of the information that is important for the analysis
-#[derive(Clone)]
-struct GoAnnot {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoAnnotation {
     gene_product_id: TermId,
     gene_product_symbol: String,
     relation: GoTermRelation,
-    go_id: TermId,
+    gene_ontology_id: TermId,
     evidence_code: EviCode,
     aspect: Aspect,
 }
 
-impl GoAnnot {
-    pub fn new<T: Into<String>>(
+impl GoAnnotation {
+    pub fn new<T>(
         term: TermId,
         symbol: T,
         relation: GoTermRelation,
         gene_ontology_id: TermId,
-        evicode: EviCode,
+        evidence_code: EviCode,
         aspect: Aspect,
-    ) -> Self {
-        GoAnnot {
+    ) -> Self
+    where
+        T: ToString,
+    {
+        GoAnnotation {
             gene_product_id: term,
-            gene_product_symbol: symbol.into(),
-            relation: relation,
-            go_id: gene_ontology_id,
-            evidence_code: evicode,
-            aspect: aspect,
+            gene_product_symbol: symbol.to_string(),
+            relation,
+            gene_ontology_id,
+            evidence_code,
+            aspect,
         }
     }
 }
 
-struct GoAnnotations {
-    annotation_list: Vec<GoAnnot>,
-    version: String,
+/// A container with all GO annotations, as parsed from the annotation data file.
+pub struct GoAnnotations {
+    pub annotations: Vec<GoAnnotation>,
+    pub version: String,
+    pub negated_annotation_count: usize,
 }
 
 /// To be used for serialization to display the most interesting characteristics of the annotation as a table
-#[derive(Serialize)]
-struct AnnotationStat {
-    key: String,
-    value: String,
-}
+// #[derive(Debug, Clone, PartialEq, Eq)]
+// #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+// struct AnnotationStat {
+//     key: String,
+//     value: String,
+// }
 
-impl AnnotationStat {
-    pub fn from_string(item: &str, val: &str) -> Self {
-        AnnotationStat {
-            key: item.to_string(),
-            value: val.to_string(),
-        }
-    }
+// impl AnnotationStat {
+//     pub fn from_string(item: &str, val: &str) -> Self {
+//         AnnotationStat {
+//             key: item.to_string(),
+//             value: val.to_string(),
+//         }
+//     }
 
-    pub fn from_int<T>(item: &str, val: T) -> Self
-        where T: Display
+//     pub fn from_int<T>(item: &str, val: T) -> Self
+//     where
+//         T: ToString,
+//     {
+//         AnnotationStat {
+//             key: item.to_string(),
+//             value: val.to_string(),
+//         }
+//     }
+// }
+
+// fn annotation_descriptive_stats(go_annots: &[GoAnnotation]) -> Vec<AnnotationStat> {
+//     let mut annots = Vec::new();
+//     let annot_count = go_annots.len();
+//     annots.push(AnnotationStat::from_int("Total annotations", annot_count));
+//     let unique_symbols: HashSet<_> = go_annots
+//         .iter()
+//         .map(|annot| &annot.gene_product_symbol)
+//         .collect();
+//     annots.push(AnnotationStat::from_int("genes", unique_symbols.len()));
+//     // Count relation types
+//     let mut relation_counts = HashMap::new();
+
+//     for annot in go_annots {
+//         *relation_counts.entry(annot.relation.clone()).or_insert(0) += 1;
+//     }
+//     for (relation, count) in &relation_counts {
+//         annots.push(AnnotationStat::from_int(&relation.to_string(), *count));
+//     }
+//     annots
+// }
+
+pub struct GoGafAnnotationLoader;
+
+impl AnnotationLoader<GoAnnotations> for GoGafAnnotationLoader {
+    fn load_from_buf_read<R>(&self, read: R) -> anyhow::Result<GoAnnotations>
+    where
+        R: BufRead,
     {
-        AnnotationStat {
-            key: item.to_string(),
-            value: val.to_string(),
+        let mut annotations = vec![];
+        let mut negated_annotation_count = 0;
+        let mut parsed_date = false; // The GOA format has multiple entries for date-generated. We only want the first
+        let mut version = "UNKNOWN".to_string();
+        for line in read.lines() {
+            match line {
+                Ok(line) => {
+                    if line.starts_with("!") {
+                        if line.starts_with("!date-generated: ") && !parsed_date {
+                            let date_gen = &line[("!date-generated: ".len() + 2)..];
+                            parsed_date = true;
+                            version = date_gen.to_string();
+                        }
+                    } else {
+                        match parse_annotation_line(&line) {
+                            Ok(ann) => annotations.push(ann),
+                            Err(InputError::NegatedAnnotation) => negated_annotation_count += 1,
+                            Err(e) => bail!(e),
+                        }
+                    }
+                }
+                Err(e) => bail!(e),
+            }
         }
+
+        Ok(GoAnnotations {
+            annotations,
+            negated_annotation_count,
+            version,
+        })
     }
 }
-
-fn annotation_descriptive_stats(go_annots: &Vec<GoAnnot>) -> Vec<AnnotationStat> {
-    let mut annots = Vec::new();
-    let annot_count = go_annots.len();
-    annots.push(AnnotationStat::from_int("Total annotations", annot_count));
-    let unique_symbols: HashSet<_> = go_annots
-        .iter()
-        .map(|annot| &annot.gene_product_symbol)
-        .collect();
-    annots.push(AnnotationStat::from_int("genes", unique_symbols.len()));
-    // Count relation types
-    let mut relation_counts = HashMap::new();
-
-    for annot in go_annots {
-        *relation_counts.entry(annot.relation.clone()).or_insert(0) += 1;
-    }
-    for (relation, count) in &relation_counts {
-        annots.push(AnnotationStat::from_int(&relation.to_string(), *count));
-    }
-    annots
-}
-
-const GOA_EXPECTED_FIELDS: usize = 17;
 
 /// Process a line in go-annotation-file-gaf-format-2.2
-fn process_annotation_line(line: &str) -> Result<GoAnnot, InputError> {
+fn parse_annotation_line(line: &str) -> Result<GoAnnotation, InputError> {
     let tokens: Vec<&str> = line.split('\t').collect();
     if tokens.len() != GOA_EXPECTED_FIELDS {
         return Err(InputError::MalformedLine(format!(
@@ -277,7 +336,7 @@ fn process_annotation_line(line: &str) -> Result<GoAnnot, InputError> {
     }; // return on error immediately
     let evidence = EviCode::from_str(tokens[6])?; // return on error immediately
     let aspect = Aspect::from_str(tokens[8])?; // return on error immediately
-    Ok(GoAnnot::new(
+    Ok(GoAnnotation::new(
         gene_product_id,
         symbol,
         relation,
@@ -287,56 +346,8 @@ fn process_annotation_line(line: &str) -> Result<GoAnnot, InputError> {
     ))
 }
 
-
-pub fn process_file(path: &str) -> Result<String, String> {
-    let file = File::open(path).expect("Could not open goa file"); // todo better error handling
-    let buf_reader = BufReader::new(file); 
-    let decoder = GzDecoder::new(buf_reader); 
-    let reader = BufReader::new(decoder); 
-
-    let mut annotations = vec![];
-    let mut annotation_stats: Vec<AnnotationStat> = vec![];
-    let mut num_negated_annos = 0;
-    let mut parsed_date = false; // The GOA format has multiple entries for date-generated. We only want the first
-    for line in reader.lines() {
-        match line {
-            Ok(content) => {
-                if content.starts_with("!") {
-                    //print!("{}", content);
-                    if content.starts_with("!date-generated: ") && ! parsed_date {
-                        let date_gen = &content[("!date-generated: ".len() + 2)..];
-                        parsed_date = true;
-                        annotation_stats
-                            .push(AnnotationStat::from_string("version", date_gen));
-                    }
-                } else {
-                    let goann = process_annotation_line(&content);
-                    match goann {
-                        Ok(go_annotation) => annotations.push(go_annotation),
-                        Err(e) => match &e {
-                            InputError::NegatedAnnotation => num_negated_annos += 1,
-                            other => println!("{}", other),
-                        },
-                    }
-                }
-            }
-            Err(e) => return Err(format!("Error reading file: {}", e)),
-        }
-    }
-    print!("Parsed {} annotations", annotations.len());
-    annotation_stats.push(AnnotationStat::from_int(
-        "Negated annotations",
-        num_negated_annos,
-    ));
-    
-    let stats_counts = annotation_descriptive_stats(&annotations);
-    annotation_stats.extend(stats_counts);
-    serde_json::to_string(&annotation_stats).map_err(|e| format!("Serialization error: {}", e))
-}
-
 #[cfg(test)]
-mod test {
-    use std::assert_eq;
+mod tests {
 
     use super::*;
 
