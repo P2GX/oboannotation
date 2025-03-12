@@ -2,17 +2,21 @@
 name = "oboannotation"
 version = "0.1.2"
 edition = "2024"
+description = "Access annotations of biomedical ontologies."
 
 [[bin]]
 name = "demo"
 path = "bin/demo.rs"
 
 [dependencies]
-serde_json = "1.0.114"
-serde = { version = "1.0.197", features = ["derive"] }
-num = "0.4"
+anyhow = "1.0.97"
+clap = { version = "4.5", features = ["derive"] }
 flate2 = "1.0"
-clap = { version = "4.5", features = ["derive"] }
+num = "0.4"
+ontolius = { version = "0.5.0", default-features = false }
+serde = { version = "1.0.197", features = ["derive"], optional = true }
+serde_json = { version = "1.0.114", optional = true }
 
-[dev-dependencies]
-clap = { version = "4.5", features = ["derive"] }
+[features]
+default = ["serde"]
+serde = ["dep:serde", "dep:serde_json"]
