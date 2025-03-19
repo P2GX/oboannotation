@@ -59,6 +59,7 @@ impl FromStr for Sex {
 /// * `I` (Mode of inheritance)
 /// * `C` (Clinical course)
 /// * `M` (Modifier)
+/// * `H` (Past medical history)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Aspect {
     /// Phenotypic abnormality.
@@ -69,6 +70,8 @@ pub enum Aspect {
     ClinicalModifier,
     /// Modifier.
     Modifier,
+    /// Past medical history.
+    PastMedicalHistory,
 }
 
 impl TryFrom<char> for Aspect {
@@ -80,6 +83,7 @@ impl TryFrom<char> for Aspect {
             'I' | 'i' => Ok(Aspect::Inheritance),
             'C' | 'c' => Ok(Aspect::ClinicalModifier),
             'M' | 'm' => Ok(Aspect::Modifier),
+            'H' | 'h' => Ok(Aspect::PastMedicalHistory),
             _ => Err(format!("Unknown aspect code: `{value}`")),
         }
     }
@@ -150,8 +154,9 @@ pub struct HpoAnnotationLine {
     pub curators: Vec<String>,
 }
 
-/// The HPO annotation corpus with entries
-/// parsed to the highest level possible without need
+/// The HPO annotation corpus with entries parsed to the highest level possible
+/// without making any wild assumptions on top of the HPOA format description.
+#[derive(Debug, Clone)]
 pub struct HpoAnnotationLines {
     pub lines: Vec<HpoAnnotationLine>,
     pub version: String,
