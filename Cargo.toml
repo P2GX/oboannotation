@@ -12,10 +12,11 @@ path = "bin/demo.rs"
 anyhow = "1.0.97"
 clap = { version = "4.5", features = ["derive"] }
 flate2 = "1.0"
-num = "0.4"
 ontolius = { version = "0.5.0", default-features = false }
+regex = "1.11.1"
 serde = { version = "1.0.197", features = ["derive"], optional = true }
 serde_json = { version = "1.0.114", optional = true }
+thiserror = "2.0.12"
 
 [features]
 default = ["serde"]

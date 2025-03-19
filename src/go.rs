@@ -1,16 +1,17 @@
 //! Parse Gene Ontology annotations.
 //!
 //! Use [`GoGafAnnotationLoader`] to parse GAF file into [`GoAnnotations`].
-use anyhow::bail;
 use ontolius::TermId;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::fmt::Display;
 use std::io::BufRead;
 use std::str::FromStr;
+use std::{
+    error::Error,
+    fmt::{Display, Formatter},
+};
 
-use crate::io::AnnotationLoader;
+use crate::io::{AnnotationLoadError, AnnotationLoader, ValidationIssue};
 
 /// The number of columns in GO GAF file.
 const GOA_EXPECTED_FIELDS: usize = 17;
@@ -24,7 +25,7 @@ pub enum InputError {
 }
 
 impl Display for InputError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
             InputError::NegatedAnnotation => write!(f, "Negated annotation detected"),
             InputError::MalformedLine(ref s) => write!(f, "Malformed line: {}", s),
@@ -65,7 +66,7 @@ pub enum GoTermRelation {
 }
 
 impl Display for GoTermRelation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let relation_str = match self {
             GoTermRelation::Enables => "enables",
             GoTermRelation::ContributesTo => "contributes_to",
@@ -228,7 +229,7 @@ pub struct GoAnnotations {
     pub negated_annotation_count: usize,
 }
 
-/// To be used for serialization to display the most interesting characteristics of the annotation as a table
+// To be used for serialization to display the most interesting characteristics of the annotation as a table
 // #[derive(Debug, Clone, PartialEq, Eq)]
 // #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 // struct AnnotationStat {
@@ -279,15 +280,16 @@ pub struct GoAnnotations {
 pub struct GoGafAnnotationLoader;
 
 impl AnnotationLoader<GoAnnotations> for GoGafAnnotationLoader {
-    fn load_from_buf_read<R>(&self, read: R) -> anyhow::Result<GoAnnotations>
+    fn load_from_buf_read<R>(&self, read: R) -> Result<GoAnnotations, AnnotationLoadError>
     where
         R: BufRead,
     {
         let mut annotations = vec![];
+        let mut issues = vec![];
         let mut negated_annotation_count = 0;
         let mut parsed_date = false; // The GOA format has multiple entries for date-generated. We only want the first
         let mut version = "UNKNOWN".to_string();
-        for line in read.lines() {
+        for (n, line) in read.lines().enumerate() {
             match line {
                 Ok(line) => {
                     if line.starts_with("!") {
@@ -300,11 +302,14 @@ impl AnnotationLoader<GoAnnotations> for GoGafAnnotationLoader {
                         match parse_annotation_line(&line) {
                             Ok(ann) => annotations.push(ann),
                             Err(InputError::NegatedAnnotation) => negated_annotation_count += 1,
-                            Err(e) => bail!(e),
+                            Err(e) => issues.push(ValidationIssue {
+                                n,
+                                reason: e.to_string(),
+                            }),
                         }
                     }
                 }
-                Err(e) => bail!(e),
+                Err(e) => return Err(e.into()),
             }
         }
 
@@ -392,14 +397,11 @@ mod tests {
     fn test_invalid_evidence_code() {
         let ecode = EviCode::from_str("something");
         assert!(ecode.is_err());
-        match ecode {
-            Err(e) => {
-                assert_eq!(
-                    e.to_string(),
-                    "Parsing error: Did not recognize 'something' as EvidenceCode.".to_string()
-                );
-            }
-            Ok(_) => panic!("Expected an error, but got Ok."),
-        }
+
+        let e = ecode.unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "Parsing error: Did not recognize 'something' as EvidenceCode.".to_string()
+        );
     }
 }
