@@ -15,7 +15,7 @@ flate2 = "1.0"
 ontolius = { version = "0.5", default-features = false }
 regex = "1.11.1"
 serde = { version = "1.0.197", features = ["derive"], optional = true }
-serde_json = { version = "1.0.114", optional = true }
+serde_json = { version = "1.0.140", optional = true }
 thiserror = "2.0.12"
 
 [features]
