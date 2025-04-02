@@ -4,37 +4,25 @@
 use ontolius::TermId;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 use std::io::BufRead;
 use std::str::FromStr;
-use std::{
-    error::Error,
-    fmt::{Display, Formatter},
-};
 
 use crate::io::{AnnotationLoadError, AnnotationLoader, ValidationIssue};
 
 /// The number of columns in GO GAF file.
 const GOA_EXPECTED_FIELDS: usize = 17;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum InputError {
+    #[error("Negated annotation detected")]
     NegatedAnnotation, // we skip negated annotations
+    #[error("Malformed line {0}")]
     MalformedLine(String),
+    #[error("Parsing error: {0}")]
     ParsingError(String), // Another error type
                           // Add other error kinds as needed
 }
-
-impl Display for InputError {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match *self {
-            InputError::NegatedAnnotation => write!(f, "Negated annotation detected"),
-            InputError::MalformedLine(ref s) => write!(f, "Malformed line: {}", s),
-            InputError::ParsingError(ref s) => write!(f, "Parsing error: {}", s),
-        }
-    }
-}
-
-impl Error for InputError {}
 
 /// Gene product to GO term relations
 /// enables links a gene product to a Molecular Function it executes.
@@ -63,6 +51,7 @@ pub enum GoTermRelation {
     LocatedIn,
     ColocalizesWith,
     PartOf,
+    NegatedAnnotation,
 }
 
 impl Display for GoTermRelation {
@@ -86,6 +75,7 @@ impl Display for GoTermRelation {
             GoTermRelation::LocatedIn => "located_in",
             GoTermRelation::PartOf => "part_of",
             GoTermRelation::ColocalizesWith => "colocalizes_with",
+            GoTermRelation::NegatedAnnotation => "NOT",
         };
         write!(f, "{}", relation_str)
     }
@@ -96,7 +86,7 @@ impl FromStr for GoTermRelation {
 
     fn from_str(s: &str) -> Result<Self, InputError> {
         if s.starts_with("NOT") {
-            return Err(InputError::NegatedAnnotation);
+            return Ok(GoTermRelation::NegatedAnnotation);
         }
         match s {
             "enables" => Ok(GoTermRelation::Enables),
@@ -141,7 +131,7 @@ pub enum EviCode {
 impl FromStr for EviCode {
     type Err = InputError;
 
-    fn from_str(s: &str) -> Result<Self, InputError> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "EXP" | "IDA" | "IPI" | "IMP" | "IGI" | "IEP" => Ok(EviCode::EXP),
             "HTP" | "HDA" | "HMP" | "HGI" | "HEP" => Ok(EviCode::HTP),
@@ -173,7 +163,7 @@ pub enum Aspect {
 impl FromStr for Aspect {
     type Err = InputError;
 
-    fn from_str(s: &str) -> Result<Self, InputError> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "F" => Ok(Aspect::F),
             "P" => Ok(Aspect::P),
@@ -220,6 +210,10 @@ impl GoAnnotation {
             aspect,
         }
     }
+    /// A negated annotation in GO means the gene product does not have the annotation in question
+    pub fn is_negated(&self) -> bool {
+        self.relation == GoTermRelation::NegatedAnnotation
+    }
 }
 
 /// A container with all GO annotations, as parsed from the annotation data file.
@@ -228,54 +222,6 @@ pub struct GoAnnotations {
     pub version: String,
     pub negated_annotation_count: usize,
 }
-
-// To be used for serialization to display the most interesting characteristics of the annotation as a table
-// #[derive(Debug, Clone, PartialEq, Eq)]
-// #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-// struct AnnotationStat {
-//     key: String,
-//     value: String,
-// }
-
-// impl AnnotationStat {
-//     pub fn from_string(item: &str, val: &str) -> Self {
-//         AnnotationStat {
-//             key: item.to_string(),
-//             value: val.to_string(),
-//         }
-//     }
-
-//     pub fn from_int<T>(item: &str, val: T) -> Self
-//     where
-//         T: ToString,
-//     {
-//         AnnotationStat {
-//             key: item.to_string(),
-//             value: val.to_string(),
-//         }
-//     }
-// }
-
-// fn annotation_descriptive_stats(go_annots: &[GoAnnotation]) -> Vec<AnnotationStat> {
-//     let mut annots = Vec::new();
-//     let annot_count = go_annots.len();
-//     annots.push(AnnotationStat::from_int("Total annotations", annot_count));
-//     let unique_symbols: HashSet<_> = go_annots
-//         .iter()
-//         .map(|annot| &annot.gene_product_symbol)
-//         .collect();
-//     annots.push(AnnotationStat::from_int("genes", unique_symbols.len()));
-//     // Count relation types
-//     let mut relation_counts = HashMap::new();
-
-//     for annot in go_annots {
-//         *relation_counts.entry(annot.relation.clone()).or_insert(0) += 1;
-//     }
-//     for (relation, count) in &relation_counts {
-//         annots.push(AnnotationStat::from_int(&relation.to_string(), *count));
-//     }
-//     annots
-// }
 
 pub struct GoGafAnnotationLoader;
 
@@ -349,6 +295,84 @@ fn parse_annotation_line(line: &str) -> Result<GoAnnotation, InputError> {
         evidence,
         aspect,
     ))
+}
+
+pub mod stats {
+    use std::{
+        collections::{HashMap, HashSet},
+        fmt::Display,
+    };
+
+    use ontolius::TermId;
+    #[cfg(feature = "serde")]
+    use serde::Serialize;
+
+    use super::GoAnnotations;
+
+    pub fn get_annotation_map(annotations: &GoAnnotations) -> HashMap<String, HashSet<TermId>> {
+        let mut annot_map = HashMap::new();
+        for ann in &annotations.annotations {
+            if ann.is_negated() {
+                continue;
+            }
+            let symbol = ann.gene_product_symbol.clone();
+            let tid = ann.gene_ontology_id.clone();
+            // Insert into HashMap, creating a new HashSet if necessary
+            annot_map
+                .entry(symbol)
+                .or_insert_with(|| HashSet::new())
+                .insert(tid); //
+        }
+
+        annot_map
+    }
+
+    pub fn get_annotation_stats(annotations: &GoAnnotations) -> Vec<AnnotationStat> {
+        let mut annotation_stats: Vec<AnnotationStat> = vec![];
+        annotation_stats.push(AnnotationStat::from_string("version", &annotations.version));
+        let annot_count = annotation_stats.len();
+        annotation_stats.push(AnnotationStat::from_int("Total annotations", annot_count));
+        let unique_symbols: HashSet<_> = annotations
+            .annotations
+            .iter()
+            .map(|annot| &annot.gene_product_symbol)
+            .collect();
+        annotation_stats.push(AnnotationStat::from_int("genes", unique_symbols.len()));
+        // Count relation types
+        let mut relation_counts = HashMap::new();
+
+        for annot in &annotations.annotations {
+            *relation_counts.entry(annot.relation.clone()).or_insert(0) += 1;
+        }
+        for (relation, count) in &relation_counts {
+            annotation_stats.push(AnnotationStat::from_int(&relation.to_string(), *count));
+        }
+
+        annotation_stats
+    }
+
+    /// To be used for serialization to display the most interesting characteristics of the annotation as a table
+    #[cfg_attr(feature = "serde", derive(Serialize))]
+    pub struct AnnotationStat {
+        key: String,
+        value: String,
+    }
+
+    impl AnnotationStat {
+        pub fn from_string(item: &str, val: &str) -> Self {
+            AnnotationStat {
+                key: item.to_string(),
+                value: val.to_string(),
+            }
+        }
+
+        pub fn from_int<T: Display>(item: &str, val: T) -> Self {
+            AnnotationStat {
+                key: item.to_string(),
+                value: format!("{}", val),
+            }
+        }
+    }
 }
 
 #[cfg(test)]

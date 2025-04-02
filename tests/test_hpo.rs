@@ -38,4 +38,3 @@ mod hpo_annotation_parser {
         )
     }
 }
-
