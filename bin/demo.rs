@@ -1,37 +1,53 @@
+use anyhow::bail;
 use clap::Parser;
-use std::path::PathBuf;
+use flate2::read::GzDecoder;
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+    path::{Path, PathBuf},
+};
 
-use oboannotation::goannotation::GoAnnotations;
+use oboannotation::{
+    go::{GoGafAnnotationLoader, stats::get_annotation_map},
+    io::AnnotationLoader,
+};
 
 #[derive(Parser, Debug)]
-#[command(version = "0.1.6", about = "Fenominal implementation in Rust")]
+#[command(version = "0.1.6", about = "Oboannotation demo")]
 struct Args {
-   /// Path to the goa_human.gaf.gz file
-   #[arg(long, value_name = "FILE")]
-   goa: PathBuf,
-
+    /// Path to the goa_human.gaf.gz file
+    #[arg(long, value_name = "FILE")]
+    goa: PathBuf,
 }
 
-
-
-fn main() {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let goa_path = args.goa;
-    let goa_path_str: &str = goa_path.to_str().expect("Invalid UTF-8 in path");
-    println!("processing {}", goa_path_str);
-    let goannots = GoAnnotations::new(goa_path_str).expect("Could not create GO Annotations");
-    let result = goannots.get_annotation_statistics_json();
-    match result {
-        Ok(json_string) => println!("{}", json_string),
-        Err(e) => eprint!("Could not extract GOA stats: {}", e.to_string())
-    }
+
+    println!("processing {:?}", goa_path);
+
+    let reader: Box<dyn BufRead> = open_for_reading(goa_path)?;
+    
+    let loader = GoGafAnnotationLoader;
+    let annotations = match loader.load_from_buf_read(reader) {
+        Ok(annotations) => {
+            println!(
+                "Loaded {:?} annotations. Skipped {:?} negated annotations",
+                annotations.annotations.len(),
+                annotations.negated_annotation_count
+            );
+            annotations
+        }
+        Err(e) => {
+            bail!("Could not load GOA: {e}")
+        }
+    };
     // now count the annotations for the first ten genes
     println!("##############\nShowing the first ten GO annotation profiles");
-    let annot_map = goannots.get_annotation_map();
+    let annot_map = get_annotation_map(&annotations);
     let mut c = 0;
     for (symbol, term_ids) in &annot_map {
-        let count = term_ids.len();
-        println!("{} has {} unique GO annotations", symbol, count);
+        println!("{} has {} unique GO annotations", symbol, term_ids.len());
         if c > 10 {
             break;
         } else {
@@ -39,4 +55,17 @@ fn main() {
         }
     }
 
+    Ok(())
+}
+
+fn open_for_reading<P: AsRef<Path>>(goa_path: P) -> anyhow::Result<Box<dyn BufRead>> {
+    Ok(if let Some(extension) = goa_path.as_ref().extension() {
+        if extension == "gz" {
+            Box::new(BufReader::new(GzDecoder::new(File::open(goa_path)?)))
+        } else {
+            Box::new(BufReader::new(File::open(goa_path)?))
+        }
+    } else {
+        Box::new(BufReader::new(File::open(goa_path)?))
+    })
 }
