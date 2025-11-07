@@ -320,7 +320,7 @@ pub mod stats {
             // Insert into HashMap, creating a new HashSet if necessary
             annot_map
                 .entry(symbol)
-                .or_insert_with(|| HashSet::new())
+                .or_insert_with(HashSet::new)
                 .insert(tid); //
         }
 
