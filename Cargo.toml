@@ -1,6 +1,6 @@
 [package]
 name = "oboannotation"
-version = "0.2.0-dev0"
+version = "0.2.0"
 edition = "2024"
 description = "Access annotations of biomedical ontologies"
 
