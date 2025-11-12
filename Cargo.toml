@@ -19,6 +19,5 @@ serde_json = { version = "1.0.140", optional = true }
 thiserror = "2.0.12"
 
 [features]
-default = ["serde"]
 serde = ["dep:serde", "dep:serde_json"]
 binaries = ["dep:clap", "dep:flate2"]
