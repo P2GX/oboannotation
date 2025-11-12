@@ -1,13 +1,19 @@
 [package]
 name = "oboannotation"
 version = "0.2.0"
-edition = "2024"
 description = "Access annotations of biomedical ontologies"
+keywords = ["ontology", "bioinformatics", "HPO", "MAxO", "GO"]
+edition = "2024"
 
-[[bin]]
-name = "demo"
-path = "bin/demo.rs"
-required-features = ["binaries"]
+homepage = "https://github.com/P2GX/oboannotation"
+repository = "https://github.com/P2GX/oboannotation"
+readme = "README.md"
+license-file = "LICENSE"
+
+authors = [
+    "Daniel Danis <daniel.gordon.danis@protonmail.com>",
+    "Peter N Robinson <peter.robinson@jax.org>",
+]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"], optional = true }
@@ -21,3 +27,8 @@ thiserror = "2.0.12"
 [features]
 serde = ["dep:serde", "dep:serde_json"]
 binaries = ["dep:clap", "dep:flate2"]
+
+[[bin]]
+name = "demo"
+path = "bin/demo.rs"
+required-features = ["binaries"]
