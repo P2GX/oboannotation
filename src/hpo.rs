@@ -4,7 +4,6 @@ use std::{str::FromStr, sync::LazyLock};
 
 use ontolius::TermId;
 use regex::Regex;
-use thiserror::Error;
 
 /// Evidence codes used in HPO.
 ///
@@ -162,7 +161,7 @@ pub enum Frequency {
 }
 
 /// The possible reasons for failing to parse a frequency from a `&str`.
-#[derive(Clone, Debug, Error, PartialEq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq)]
 pub enum FrequencyParseError {
     #[error("Empty value")]
     EmptyVal,
