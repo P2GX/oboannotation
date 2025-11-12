@@ -16,7 +16,7 @@ pub struct ValidationIssue {
 
 impl ValidationIssue {
     /// Create a new validation issue for the `n`th line.
-    pub fn new<T>(n: usize, reason: T) -> Self
+    pub fn new<T>(n: usize, reason: &T) -> Self
     where
         T: ToString,
     {

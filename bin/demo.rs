@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
     println!("processing {:?}", goa_path);
 
     let reader: Box<dyn BufRead> = open_for_reading(goa_path)?;
-    
+
     let loader = GoGafAnnotationLoader;
     let annotations = match loader.load_from_buf_read(reader) {
         Ok(annotations) => {

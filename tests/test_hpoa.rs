@@ -4,7 +4,7 @@ const FPATH_SMALL_HPOA: &str = "data/phenotype.real-shortlist.hpoa";
 mod hpo_annotation_parser {
 
     use oboannotation::{
-        hpo::{Frequency, HpoAnnotationLoader},
+        hpo::{Frequency, io::HpoAnnotationLoader},
         io::AnnotationLoader,
     };
 
