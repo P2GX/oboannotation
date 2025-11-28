@@ -64,7 +64,7 @@ pub enum Aspect {
     /// Inheritance.
     Inheritance,
     /// Onset and clinical course.
-    ClinicalModifier,
+    ClinicalCourse,
     /// Modifier.
     Modifier,
     /// Past medical history.
@@ -86,7 +86,7 @@ impl TryFrom<char> for Aspect {
         match value {
             'P' | 'p' => Ok(Aspect::Phenotype),
             'I' | 'i' => Ok(Aspect::Inheritance),
-            'C' | 'c' => Ok(Aspect::ClinicalModifier),
+            'C' | 'c' => Ok(Aspect::ClinicalCourse),
             'M' | 'm' => Ok(Aspect::Modifier),
             'H' | 'h' => Ok(Aspect::PastMedicalHistory),
             _ => Err("Unknown aspect code"),
@@ -355,14 +355,20 @@ pub struct HpoAnnotation {
 
 /// Parse disease-phenotype annotations from HPO annotation file.
 pub mod io {
-    use std::io::BufRead;
-
     use ontolius::TermIdParseError;
     use regex::Regex;
+    use std::fmt::{Debug, Display};
+    use std::fs::File;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::path::Path;
 
+    use super::{
+        AnnotationReference, Aspect, EvidenceCode, Frequency, FrequencyParseError, HpoAnnotation,
+        Sex,
+    };
     use crate::{
-        hpo::{AnnotationReference, Aspect, EvidenceCode, FrequencyParseError, HpoAnnotation},
-        io::{AnnotationLoadError, AnnotationLoader, ValidationIssue},
+        format::Hpoa,
+        io::{AnnotationLoadError, AnnotationLoader, ValidationIssue, WriteAnnotation},
     };
 
     const HPOA_COLUMN_COUNT: usize = 12;
@@ -522,6 +528,20 @@ pub mod io {
     }
 
     impl AnnotationLoader<HpoAnnotationLines> for HpoAnnotationLoader {
+        fn load_from_path<P>(&self, path: P) -> Result<HpoAnnotationLines, AnnotationLoadError>
+        where
+            P: AsRef<Path>,
+        {
+            self.load_from_read(File::open(path)?)
+        }
+
+        fn load_from_read<R>(&self, read: R) -> Result<HpoAnnotationLines, AnnotationLoadError>
+        where
+            R: Read,
+        {
+            self.load_from_buf_read(BufReader::new(read))
+        }
+
         fn load_from_buf_read<R>(
             &self,
             mut read: R,
@@ -575,19 +595,112 @@ pub mod io {
                 Err(AnnotationLoadError::Error("Missing version".into()))
             }
         }
+    }
 
-        fn load_from_path<P>(&self, path: P) -> Result<HpoAnnotationLines, AnnotationLoadError>
+    impl WriteAnnotation<Hpoa> for HpoAnnotation {
+        fn write_ann<W>(&self, w: &mut W) -> std::io::Result<()>
         where
-            P: AsRef<std::path::Path>,
+            W: Write
         {
-            self.load_from_read(std::fs::File::open(path)?)
+            // database_id, disease_name
+            write!(w, "{}\t{}\t", self.disease_id, self.disease_name)?;
+
+            // qualifier
+            if self.is_negated {
+                write!(w, "NOT")?
+            }
+            write!(w, "\t")?;
+
+            // hpo_id
+            write!(w, "{}\t", self.phenotype_term_id)?;
+
+            // reference, evidence
+            if let Some((last, rest)) = self.annotation_references.split_last() {
+                for ar in rest.iter() {
+                    write!(w, "{};", ar.term_id)?;
+                }
+                write!(w, "{}\t", last.term_id)?;
+                write_annotation_reference_evidence_code(w, last.evidence_code)?;
+            } else {
+                write!(w, "\t")?
+            }
+            write!(w, "\t")?;
+
+            // onset
+            if let Some(onset) = &self.onset {
+                write!(w, "{}", onset)?;
+            }
+            write!(w, "\t")?;
+
+            // frequency
+            if let Some(frequency) = &self.frequency {
+                format_frequency(w, frequency)?;
+            }
+            write!(w, "\t")?;
+
+            // sex
+            if let Some(sex) = &self.sex {
+                format_sex(w, sex)?;
+            }
+            write!(w, "\t")?;
+
+            // modifier
+            write_semicolon_separated_array(w, &self.modifiers)?;
+            write!(w, "\t")?;
+
+            // aspect
+            match &self.aspect {
+                Aspect::Phenotype => write!(w, "P")?,
+                Aspect::Inheritance => write!(w, "I")?,
+                Aspect::ClinicalCourse => write!(w, "C")?,
+                Aspect::Modifier => write!(w, "M")?,
+                Aspect::PastMedicalHistory => write!(w, "H")?,
+            }
+            write!(w, "\t")?;
+
+            // biocuration
+            write_semicolon_separated_array(w, &self.curators)?;
+            write!(w, "\n")?;
+
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod test_hpo_annotation_write {
+        use super::hpoa_examples::{make_complex_hpo_annotation, make_simple_hpo_annotation};
+        use crate::format::Hpoa;
+        use crate::hpo::HpoAnnotation;
+        use crate::io::WriteAnnotation;
+
+        #[test]
+        fn test_write_complex_hpo_annotation() -> std::io::Result<()> {
+            let a = make_complex_hpo_annotation();
+
+            let mut buf = Vec::new();
+            <HpoAnnotation as WriteAnnotation<Hpoa>>::write_ann(&a, &mut buf)?;
+
+            let line = str::from_utf8(&buf).unwrap();
+            assert_eq!(
+                line,
+                "OMIM:303110\tXq21 deletion syndrome\tNOT\tHP:0000365\tPMID:3476958\tPCS\tHP:0003577\t4/8\tMALE\tHP:0012828\tP\tHPO:iea[2009-02-17];HPO:probinson[2021-09-27];HPO:probinson[2021-09-27]\n"
+            );
+            Ok(())
         }
 
-        fn load_from_read<R>(&self, read: R) -> Result<HpoAnnotationLines, AnnotationLoadError>
-        where
-            R: std::io::Read,
-        {
-            self.load_from_buf_read(std::io::BufReader::new(read))
+        #[test]
+        fn test_write_simple_hpo_annotation() -> std::io::Result<()> {
+            let a = make_simple_hpo_annotation();
+
+            let mut buf = Vec::new();
+            <HpoAnnotation as WriteAnnotation<Hpoa>>::write_ann(&a, &mut buf)?;
+
+            let line = str::from_utf8(&buf).unwrap();
+            assert_eq!(
+                line,
+                "OMIM:303110\tXq21 deletion syndrome\t\tHP:0001419\t\t\t\t\t\t\tI\t\n"
+            );
+            Ok(())
         }
     }
 
@@ -751,6 +864,110 @@ pub mod io {
                 hpo_line.unwrap_err(),
                 HpoaErrorReason::InvalidDiseaseId(TermIdParseError::MissingDelimiter)
             );
+        }
+    }
+
+    #[cfg(test)]
+    mod hpoa_examples {
+        use crate::hpo::{
+            AnnotationReference, Aspect, EvidenceCode, Frequency, HpoAnnotation, Sex,
+        };
+
+        pub(super) fn make_complex_hpo_annotation() -> HpoAnnotation {
+            HpoAnnotation {
+                disease_id: ("OMIM", "303110").into(),
+                disease_name: "Xq21 deletion syndrome".into(),
+                is_negated: true,
+                phenotype_term_id: ("HP", "0000365").into(), // Hearing impairment
+                annotation_references: vec![AnnotationReference::new(
+                    ("PMID", "3476958").into(),
+                    EvidenceCode::PCS,
+                )],
+                onset: Some(("HP", "0003577").into()),
+                frequency: Some(Frequency::Ratio {
+                    numerator: 4,
+                    denominator: 8,
+                }),
+                sex: Some(Sex::Male),
+                modifiers: vec![("HP", "0012828").into()],
+                aspect: Aspect::Phenotype,
+                curators: vec![
+                    "HPO:iea[2009-02-17]".into(),
+                    "HPO:probinson[2021-09-27]".into(),
+                    "HPO:probinson[2021-09-27]".into(),
+                ],
+            }
+        }
+
+        pub(super) fn make_simple_hpo_annotation() -> HpoAnnotation {
+            HpoAnnotation {
+                disease_id: ("OMIM", "303110").into(),
+                disease_name: "Xq21 deletion syndrome".into(),
+                is_negated: false,
+                phenotype_term_id: ("HP", "0001419").into(), // X-linked recessive inheritance
+                annotation_references: vec![],
+                onset: None,
+                frequency: None,
+                sex: None,
+                modifiers: vec![],
+                aspect: Aspect::Inheritance,
+                curators: vec![],
+            }
+        }
+    }
+
+
+    fn format_sex<W>(w: &mut W, sex: &Sex) -> std::io::Result<()>
+    where
+        W: Write,
+    {
+        match sex {
+            Sex::Unknown => write!(w, "UNKNOWN"),
+            Sex::Male => write!(w, "MALE"),
+            Sex::Female => write!(w, "FEMALE"),
+        }
+    }
+
+    fn format_frequency<W>(w: &mut W, frequency: &Frequency) -> std::io::Result<()>
+    where
+        W: Write,
+    {
+        match frequency {
+            Frequency::TermId(term_id) => write!(w, "{}", term_id),
+            Frequency::Ratio {
+                numerator,
+                denominator,
+            } => write!(w, "{}/{}", numerator, denominator),
+            Frequency::Frequency(freq) => write!(w, "{:.1}%", freq * 100f64),
+        }
+    }
+
+    fn write_annotation_reference_evidence_code<W>(
+        w: &mut W,
+        code: EvidenceCode,
+    ) -> std::io::Result<()>
+    where
+        W: Write,
+    {
+        match code {
+            EvidenceCode::IEA => write!(w, "IEA"),
+            EvidenceCode::TAS => write!(w, "TAS"),
+            EvidenceCode::PCS => write!(w, "PCS"),
+        }
+    }
+
+    fn write_semicolon_separated_array<W, T>(w: &mut W, a: &[T]) -> std::io::Result<()>
+    where
+        W: Write,
+        T: Display,
+    {
+        if let Some((last, rest)) = a.split_last() {
+            for x in rest {
+                write!(w, "{};", x)?;
+            }
+            write!(w, "{last}")
+        } else {
+            Ok(())
         }
     }
 }

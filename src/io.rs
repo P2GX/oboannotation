@@ -1,7 +1,7 @@
 //! Load ontology annotations.
 use std::fs::File;
 
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 
 use thiserror::Error;
@@ -64,4 +64,27 @@ pub trait AnnotationLoader<A> {
     fn load_from_buf_read<R>(&self, read: R) -> Result<A, AnnotationLoadError>
     where
         R: BufRead;
+}
+
+pub trait WriteAnnotation<Fmt> {
+    fn write_ann<W>(&self, w: &mut W) -> io::Result<()>
+    where
+        W: Write;
+}
+
+pub trait ReadAnnotation<Fmt> {
+    type Err;
+    fn read<R>(&mut self, read: &mut R) -> Result<(), Self::Err>
+    where
+        R: BufRead;
+
+    fn read_default<R>(read: &mut R) -> Result<Self, Self::Err>
+    where
+        R: BufRead,
+        Self: Default,
+    {
+        let mut val = Self::default();
+        val.read(read)?;
+        Ok(val)
+    }
 }

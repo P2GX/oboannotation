@@ -32,9 +32,9 @@
 //! to learn more about the data format.
 //!
 //! ## Load GO annotations
-//! 
+//!
 //! Load a toy GO annotation file containing annotations of *FBN1* and *SURF1* genes for *Homo sapiens*.
-//! 
+//!
 //! ```rust
 //! use oboannotation::io::AnnotationLoader;
 //! use oboannotation::go::{GoAnnotations, GoGafAnnotationLoader};
@@ -50,7 +50,8 @@
 //! ```
 //! See [`GoAnnotations`][`crate::go::GoAnnotations`] and [`GoAnnotation`][`crate::go::GoAnnotation`]
 //! to learn more about the data format.
-//! 
+//!
+pub mod format;
 pub mod go;
 pub mod hpo;
 pub mod io;
