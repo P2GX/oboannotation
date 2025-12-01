@@ -15,20 +15,17 @@
 //!
 //! ```rust
 //! use oboannotation::io::AnnotationLoader;
-//! use oboannotation::hpo::HpoAnnotation;
-//! use oboannotation::hpo::io::{HpoAnnotationLines, HpoAnnotationLoader};
+//! use oboannotation::hpo::{HpoAnnotation, HpoAnnotations};
 //!
 //! // 👇 Replace with path to a real file 👇
 //! let fpath_hpoa = "data/phenotype.real-shortlist.hpoa";
-//!
-//! let loader = HpoAnnotationLoader::default();
-//! let data: HpoAnnotationLines = loader.load_from_path(fpath_hpoa)
+//! let data: HpoAnnotations = HpoAnnotations::load_from_path(fpath_hpoa)
 //!                                  .expect("Toy HPOA should be well formatted");
 //!
 //! assert_eq!(data.lines.len(), 86); // Toy HPOA includes 86 records
 //! ```
 //!
-//! See [`HpoAnnotationLines`][`crate::hpo::io::HpoAnnotationLines`] and [`HpoAnnotation`][`crate::hpo::HpoAnnotation`]
+//! See [`HpoAnnotationLines`][`crate::hpo::HpoAnnotationLines`] and [`HpoAnnotation`][`crate::hpo::HpoAnnotation`]
 //! to learn more about the data format.
 //!
 //! ## Load GO annotations
@@ -37,13 +34,12 @@
 //!
 //! ```rust
 //! use oboannotation::io::AnnotationLoader;
-//! use oboannotation::go::{GoAnnotations, GoGafAnnotationLoader};
+//! use oboannotation::go::{GoAnnotations};
 //!
 //! // 👇 Replace with path to a real file 👇
 //! let fpath_goa = "data/goa_human.SURF1_FBN1.gaf";
 //!
-//! let loader = GoGafAnnotationLoader;
-//! let data: GoAnnotations = loader.load_from_path(fpath_goa)
+//! let data: GoAnnotations = GoAnnotations::load_from_path(fpath_goa)
 //!                             .expect("Toy GO annotations should be well formatted");
 //!
 //! assert_eq!(data.annotations.len(), 156); // Toy GO annotations include 156 records

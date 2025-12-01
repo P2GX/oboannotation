@@ -2,9 +2,8 @@ const _FPATH_SMALL_HPO: &str = "data/hp.small.json";
 const FPATH_SMALL_HPOA: &str = "data/phenotype.real-shortlist.hpoa";
 
 mod hpo_annotation_parser {
-
     use oboannotation::{
-        hpo::{Frequency, io::HpoAnnotationLoader},
+        hpo::{Frequency, HpoAnnotations},
         io::AnnotationLoader,
     };
 
@@ -12,13 +11,11 @@ mod hpo_annotation_parser {
 
     #[test]
     fn load_from_path() {
-        let parser = HpoAnnotationLoader::default();
-
-        let data = parser
-            .load_from_path(FPATH_SMALL_HPOA)
+        let data = HpoAnnotations::load_from_path(FPATH_SMALL_HPOA)
             .expect("Sample data should be well formatted");
 
         assert_eq!(data.version.as_str(), "2023-04-05");
+        assert_eq!(data.hpo_version.as_str(), "2023-04-05");
         assert_eq!(data.lines.len(), 86);
 
         let first = data
@@ -32,8 +29,8 @@ mod hpo_annotation_parser {
         assert_eq!(
             first.frequency.as_ref().expect("Should be present"),
             &Frequency::Ratio {
-                numerator: 29,
-                denominator: 199
+                n: 29,
+                m: 199
             }
         )
     }

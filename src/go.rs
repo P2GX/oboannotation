@@ -1,14 +1,13 @@
 //! Parse Gene Ontology annotations.
-//!
-//! Use [`GoGafAnnotationLoader`] to parse GAF file into [`GoAnnotations`].
+
+use crate::format::Gaf;
+use crate::io::{AnnotationLoadError, AnnotationLoader, ValidationIssue};
 use ontolius::TermId;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::io::BufRead;
 use std::str::FromStr;
-
-use crate::io::{AnnotationLoadError, AnnotationLoader, ValidationIssue};
 
 /// The number of columns in GO GAF file.
 const GOA_EXPECTED_FIELDS: usize = 17;
@@ -223,10 +222,8 @@ pub struct GoAnnotations {
     pub negated_annotation_count: usize,
 }
 
-pub struct GoGafAnnotationLoader;
-
-impl AnnotationLoader<GoAnnotations> for GoGafAnnotationLoader {
-    fn load_from_buf_read<R>(&self, read: R) -> Result<GoAnnotations, AnnotationLoadError>
+impl AnnotationLoader<Gaf> for GoAnnotations {
+    fn load_from_buf_read<R>(read: R) -> Result<GoAnnotations, AnnotationLoadError>
     where
         R: BufRead,
     {
@@ -377,7 +374,6 @@ pub mod stats {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]

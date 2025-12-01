@@ -1,9 +1,9 @@
 //! Types and I/O for working with HPO Annotations.
 
-use std::{str::FromStr, sync::LazyLock};
-
 use ontolius::TermId;
 use regex::Regex;
+use std::fmt::{Display, Formatter};
+use std::{str::FromStr, sync::LazyLock};
 
 /// Evidence codes used in HPO.
 ///
@@ -94,7 +94,7 @@ impl TryFrom<char> for Aspect {
     }
 }
 
-/// Aspect can be parsed from a `&str` (case insensitive).
+/// Aspect can be parsed from a `&str` (case-insensitive).
 ///
 /// See [`Aspect::try_from<char>`] for more details.
 ///
@@ -136,7 +136,7 @@ pub enum Frequency {
     TermId(TermId),
     /// A count of patients affected within a cohort.
     ///
-    /// For instance, `7/13` would indicate that `7` of the `13` patients with the specified disease
+    /// For instance, `7/13` would indicate that `7` (n) of the `13` (m) patients with the specified disease
     /// were found to have the phenotypic abnormality referred to by the HPO term in question
     /// in the study referred to by the DB reference.
     ///
@@ -144,10 +144,10 @@ pub enum Frequency {
     /// The cohort size is `2` in the former while `4` individuals were investigated in the latter.
     Ratio {
         /// Count of individuals with the annotation.
-        numerator: u32,
+        n: u32,
         /// The total number of the individuals investigated
         /// for the presence of the annotation.
-        denominator: u32,
+        m: u32,
     },
     /// A percentage value such as 17%, again referring to the percentage of patients
     /// found to have the phenotypic abnormality referred to by the HPO term in question
@@ -157,7 +157,8 @@ pub enum Frequency {
     /// if the exact data is available.
     ///
     /// Should be a value in range of `[0..100]`. E.g. `7.` to represent 7%.
-    Frequency(f64),
+    /// The range is, however, *NOT* enforced in any fashion!
+    Percentage(f64),
 }
 
 /// The possible reasons for failing to parse a frequency from a `&str`.
@@ -165,6 +166,8 @@ pub enum Frequency {
 pub enum FrequencyParseError {
     #[error("Empty value")]
     EmptyVal,
+    #[error("`m` is greater than `n`")]
+    NGreaterThanM,
     #[error("Frequency not in range [0, 100]")]
     FrequencyOutOfBounds,
     #[error("Unparsable value")]
@@ -172,20 +175,21 @@ pub enum FrequencyParseError {
 }
 
 static RATIO_PT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?<numerator>\d+)/(?<denominator>\d+)")
+    Regex::new(r"^(?<numerator>\d+)/(?<denominator>\d+)$")
         .expect("The ratio pattern should be well formatted")
 });
 
 static FREQUENCY_PT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?<frequency>-?\d+(\.\d*)?)%")
+    Regex::new(r"^(?<frequency>-?\d+(\.\d*)?)%$")
         .expect("The frequency pattern should be well formatted")
 });
 
 /// Parse a frequency string.
 ///
 /// The parsing fails if the payload does not correspond to one of the supported input formats:
-/// * ratio - e.g. `7/13` to represent 7 out of 13.
-/// * percentage - e.g. 53.85%. Percent sign `%` is obligatory.
+/// * ratio - `n`/`m` (e.g. `7/13`) to represent presence of a feature in `n` individuals
+///   out of `m` tested for feature's presence.
+/// * percentage - e.g. 53.85%. Percent sign `%` is obligatory. The value must be between $[0, 100.0]$.
 /// * term ID - e.g. `HP:0040284` for [Very rare (HP:0040284)](https://hpo.jax.org/browse/term/HP:0040284).
 ///
 /// # Note
@@ -207,7 +211,17 @@ static FREQUENCY_PT: LazyLock<Regex> = LazyLock::new(|| {
 /// assert!(frequency.is_ok());
 ///
 /// let frequency = frequency.unwrap();
-/// assert!(matches!(frequency, Frequency::Ratio{numerator: 7, denominator: 13}));
+///
+/// assert_eq!(frequency, Frequency::Ratio {n: 7, m: 13});
+/// ```
+///
+/// Fails if $n>m$:
+/// ```
+/// use oboannotation::hpo::{Frequency, FrequencyParseError};
+///
+/// let frequency: FrequencyParseError = "13/7".parse::<Frequency>().unwrap_err();
+///
+/// assert_eq!(frequency, FrequencyParseError::NGreaterThanM);
 /// ```
 ///
 /// ## Percentage
@@ -221,7 +235,7 @@ static FREQUENCY_PT: LazyLock<Regex> = LazyLock::new(|| {
 /// assert!(frequency.is_ok());
 ///
 /// let frequency = frequency.unwrap();
-/// assert!(matches!(frequency, Frequency::Frequency(53.85)));
+/// assert!(matches!(frequency, Frequency::Percentage(53.85)));
 /// ```
 ///
 /// ## Term id
@@ -247,29 +261,54 @@ impl FromStr for Frequency {
         if s.is_empty() {
             Err(FrequencyParseError::EmptyVal)
         } else if let Some(cap) = RATIO_PT.captures(s) {
-            Ok(Frequency::Ratio {
-                numerator: cap["numerator"]
-                    .parse()
-                    .expect("Regexp should ensure that numerator is parsable into a `u32` value"),
-                denominator: cap["denominator"]
-                    .parse()
-                    .expect("Regexp should ensure that denominator is parsable into a `u32` value"),
-            })
+            let n = cap["numerator"]
+                .parse()
+                .expect("Regexp should ensure that numerator is parsable into a `u32` value");
+            let m = cap["denominator"]
+                .parse()
+                .expect("Regexp should ensure that denominator is parsable into a `u32` value");
+            if n > m {
+                Err(FrequencyParseError::NGreaterThanM)
+            } else {
+                Ok(Self::Ratio { n, m })
+            }
         } else if let Some(cap) = FREQUENCY_PT.captures(s) {
             let frequency: f64 = cap["frequency"]
                 .parse()
                 .expect("Regexp pattern should ensure that frequency is parsable into f64");
             if (0. ..=100.).contains(&frequency) {
-                Ok(Frequency::Frequency(frequency))
+                Ok(Self::Percentage(frequency))
             } else {
                 Err(FrequencyParseError::FrequencyOutOfBounds)
             }
         } else {
             // Fall back to TermId
-            match s.parse().map(Frequency::TermId) {
+            match s.parse().map(Self::TermId) {
                 Ok(frequency) => Ok(frequency),
                 Err(_) => Err(FrequencyParseError::UnparsableValue),
             }
+        }
+    }
+}
+
+/// Format a `Frequency`.
+///
+/// # Examples
+///
+/// ```
+/// use ontolius::TermId;
+/// use oboannotation::hpo::Frequency;
+///
+/// let freq: Frequency = Frequency::TermId("HP:0040284".parse().unwrap());
+///
+/// assert_eq!(freq.to_string().as_str(), "HP:0040284");
+/// ```
+impl Display for Frequency {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TermId(t) => write!(f, "{}", t),
+            Self::Ratio { n, m } => write!(f, "{n}/{m}"),
+            Self::Percentage(percentage) => write!(f, "{:.1}%", percentage),
         }
     }
 }
@@ -287,25 +326,11 @@ mod test_frequency {
     }
 
     #[test]
-    fn from_str_ratio() {
-        let f: Result<Frequency, _> = "1/44".parse();
-        assert!(f.is_ok());
+    fn from_str_freq_bad_ratio() {
+        let f: Result<Frequency, _> = "13/7".parse();
+        assert!(f.is_err());
 
-        assert_eq!(
-            f.unwrap(),
-            Frequency::Ratio {
-                numerator: 1,
-                denominator: 44
-            }
-        );
-    }
-
-    #[test]
-    fn from_str_frequency() {
-        let f: Result<Frequency, _> = "54.11%".parse();
-        assert!(f.is_ok());
-
-        assert_eq!(f.unwrap(), Frequency::Frequency(54.11));
+        assert_eq!(f.unwrap_err(), FrequencyParseError::NGreaterThanM);
     }
 
     #[test]
@@ -318,14 +343,6 @@ mod test_frequency {
             "100.01%".parse::<Frequency>().unwrap_err(),
             FrequencyParseError::FrequencyOutOfBounds
         );
-    }
-
-    #[test]
-    fn from_str_term_id() {
-        let f: Result<Frequency, _> = "HP:0040284".parse();
-        assert!(f.is_ok());
-
-        assert_eq!(f.unwrap(), Frequency::TermId("HP:0040284".parse().unwrap()));
     }
 
     #[test]
@@ -353,29 +370,54 @@ pub struct HpoAnnotation {
     pub curators: Vec<String>,
 }
 
+/// The HPO annotation corpus with entries parsed to the highest level possible
+/// while making no wild assumptions about the parsed data.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HpoAnnotations {
+    /// The HPO annotation records.
+    pub lines: Vec<HpoAnnotation>,
+    /// The HPOA version (e.g. `2023-04-05`)
+    pub version: String,
+    pub hpo_version: String,
+}
+
 /// Parse disease-phenotype annotations from HPO annotation file.
 pub mod io {
-    use ontolius::TermIdParseError;
-    use regex::Regex;
-    use std::fmt::{Debug, Display};
-    use std::fs::File;
-    use std::io::{BufRead, BufReader, Read, Write};
-    use std::path::Path;
-
     use super::{
         AnnotationReference, Aspect, EvidenceCode, Frequency, FrequencyParseError, HpoAnnotation,
-        Sex,
+        HpoAnnotations, Sex,
     };
+    use crate::io::{AnnotationWriter, ReadAnnotation};
     use crate::{
         format::Hpoa,
         io::{AnnotationLoadError, AnnotationLoader, ValidationIssue, WriteAnnotation},
     };
+    use ontolius::{Prefix, TermIdParseError};
+    use regex::Regex;
+    use std::collections::BTreeMap;
+    use std::fmt::{Debug, Display};
+    use std::io::{BufRead, Write};
+    use std::sync::LazyLock;
 
-    const HPOA_COLUMN_COUNT: usize = 12;
+    const HPOA_HEADER: [&str; 12] = [
+        "database_id",
+        "disease_name",
+        "qualifier",
+        "hpo_id",
+        "reference",
+        "evidence",
+        "onset",
+        "frequency",
+        "sex",
+        "modifier",
+        "aspect",
+        "biocuration",
+    ];
 
-    /// HPOA is a tab-delimited table ...
-    const DELIMITER: &str = "\t";
-    /// ... with 12 columns.
+    // HPOA is a tab-delimited table ...
+    const HPOA_DELIMITER: &str = "\t";
+    // ... with 12 columns.
+    const HPOA_COLUMN_COUNT: usize = HPOA_HEADER.len();
     const DISEASE_ID_COL_IDX: usize = 0;
     const DISEASE_NAME_COL_IDX: usize = 1;
     const NEGATED_COL_IDX: usize = 2;
@@ -411,7 +453,7 @@ pub mod io {
         }
     }
 
-    impl std::fmt::Display for HpoaError<'_> {
+    impl Display for HpoaError<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match &self.reason {
                 HpoaErrorReason::InvalidDiseaseId(e) => {
@@ -452,6 +494,11 @@ pub mod io {
                         "Unparsable frequency value: {}",
                         self.fields[FREQUENCY_COL_IDX]
                     ),
+                    FrequencyParseError::NGreaterThanM => write!(
+                        f,
+                        "`n` is greater than `m`: {}",
+                        self.fields[FREQUENCY_COL_IDX]
+                    ),
                 },
                 HpoaErrorReason::InvalidModifier(i, _e) => write!(
                     f,
@@ -477,7 +524,7 @@ pub mod io {
     /// The reasons for failure in parsing of HPO annotation line in [`HpoAnnotation::parse_hpoa_line`].
     #[derive(Debug, thiserror::Error, PartialEq)]
     pub enum HpoaErrorReason {
-        #[error("Cannot parse a record with {0}!={HPOA_COLUMN_COUNT}")]
+        #[error("Cannot parse a record with {0}!={col_cnt}", col_cnt=HPOA_COLUMN_COUNT)]
         InvalidFieldCount(usize),
         #[error("Invalid disease identifier: {0}")]
         InvalidDiseaseId(TermIdParseError),
@@ -495,63 +542,112 @@ pub mod io {
         InvalidAspect,
     }
 
-    /// Loader for HPO annotations.
+    impl AnnotationWriter<Hpoa> for &HpoAnnotations {
+        type Err = std::io::Error;
+
+        fn store_to_write<W>(self, mut write: W) -> Result<(), Self::Err>
+        where
+            W: Write,
+        {
+            // Comments
+            // #description: "HPO annotations for rare diseases [8362: OMIM; 47: DECIPHER; 4283 ORPHANET]"
+            let disease_counts = count_diseases(&self.lines);
+            write!(
+                &mut write,
+                "#description: \"HPO annotations for rare diseases"
+            )?;
+            if let Some((first, rest)) = disease_counts.split_first() {
+                write!(&mut write, " [{}: {}", first.1, first.0)?;
+
+                for (prefix, cnt) in rest {
+                    write!(&mut write, "; {}: {}", cnt, prefix)?;
+                }
+
+                writeln!(&mut write, "]\"")?;
+            } else {
+                writeln!(&mut write, "\"")?;
+            }
+            // versions, tracker
+            writeln!(&mut write, "#version: {}", self.version)?;
+            writeln!(
+                &mut write,
+                "#tracker: https://github.com/obophenotype/human-phenotype-ontology/issues"
+            )?;
+            writeln!(
+                &mut write,
+                "#hpo-version: https://purl.obolibrary.org/obo/hp/releases/{}/hp.json",
+                self.hpo_version
+            )?;
+
+            // header
+            if let Some((first, rest)) = HPOA_HEADER.split_first() {
+                write!(&mut write, "{first}")?;
+                for val in rest {
+                    write!(&mut write, "{}{}", HPOA_DELIMITER, val)?;
+                }
+            }
+            writeln!(&mut write)?;
+
+            // lines
+            for line in &self.lines {
+                line.write_ann(&mut write)?;
+            }
+
+            Ok(())
+        }
+    }
+
+    fn count_diseases(lines: &[HpoAnnotation]) -> Vec<(Prefix<'_>, u32)> {
+        let mut counts = BTreeMap::new();
+
+        for ann in lines {
+            *counts.entry(ann.disease_id.prefix()).or_default() += 1;
+        }
+
+        counts.into_iter().collect()
+    }
+
+    // #version: 2025-05-06
+    static HPOA_VERSION_PT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^#(date|version): (?<version>[\w-]+)\w?$")
+            .expect("Default pattern should be valid")
+    });
+
+    // #hpo-version: http://purl.obolibrary.org/obo/hp/releases/2025-05-06/hp.json
+    static HPO_VERSION_PT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^#hpo-version: (http|https)://[\w./]+/(?<version>\d{4}-\d{2}-\d{2})/hp\.json$")
+            .expect("Default pattern should be valid")
+    });
+
+    /// Load the phenotype-disease annotations from HPO annotation file.
     ///
-    /// ## Examples
+    /// # Example
     ///
     /// ```
-    /// use oboannotation::hpo::io::HpoAnnotationLoader;
     /// use oboannotation::io::AnnotationLoader;
+    /// use oboannotation::hpo::HpoAnnotations;
     ///
-    /// let loader = HpoAnnotationLoader::default();
-    ///
-    /// let data = loader.load_from_path("data/phenotype.real-shortlist.hpoa")
+    /// let data = HpoAnnotations::load_from_path("data/phenotype.real-shortlist.hpoa")
     ///              .expect("The example data should be well formatted");
     ///
     /// // Loaded HPO annotations version `2023-04-05` ...
     /// assert_eq!(data.version.as_str(), "2023-04-05");
     ///
+    /// // ... generated with HPO version `2023-04-05` ...
+    /// assert_eq!(data.hpo_version.as_str(), "2023-04-05");
+    ///
     /// // ... consisting of 86 lines.
     /// assert_eq!(data.lines.len(), 86);
     /// ```
-    pub struct HpoAnnotationLoader {
-        version_pt: Regex,
-    }
-
-    impl Default for HpoAnnotationLoader {
-        fn default() -> Self {
-            Self {
-                version_pt: Regex::new(r"^#(date|version): (?<version>[\w-]+)\w?$")
-                    .expect("Default pattern should be valid"),
-            }
-        }
-    }
-
-    impl AnnotationLoader<HpoAnnotationLines> for HpoAnnotationLoader {
-        fn load_from_path<P>(&self, path: P) -> Result<HpoAnnotationLines, AnnotationLoadError>
-        where
-            P: AsRef<Path>,
-        {
-            self.load_from_read(File::open(path)?)
-        }
-
-        fn load_from_read<R>(&self, read: R) -> Result<HpoAnnotationLines, AnnotationLoadError>
-        where
-            R: Read,
-        {
-            self.load_from_buf_read(BufReader::new(read))
-        }
-
-        fn load_from_buf_read<R>(
-            &self,
-            mut read: R,
-        ) -> Result<HpoAnnotationLines, AnnotationLoadError>
+    impl AnnotationLoader<Hpoa> for HpoAnnotations {
+        fn load_from_buf_read<R>(mut read: R) -> Result<HpoAnnotations, AnnotationLoadError>
         where
             R: BufRead,
         {
             let mut lines = vec![];
             let mut errors = vec![];
             let mut version = None;
+            let mut hpo_version = None;
 
             let mut line = String::new();
             let mut expecting_header = true;
@@ -568,16 +664,16 @@ pub mod io {
                             // Header
                             if line.starts_with("#DatabaseID") || line.starts_with("database_id") {
                                 expecting_header = false;
-                            } else if let Some(caps) = self.version_pt.captures(line.trim()) {
+                            } else if let Some(caps) = HPOA_VERSION_PT.captures(line.trim()) {
                                 version = Some(caps["version"].to_string());
+                            } else if let Some(caps) = HPO_VERSION_PT.captures(line.trim()) {
+                                hpo_version = Some(caps["version"].to_string());
                             }
                         } else {
                             // Data
-                            match HpoAnnotation::parse_hpoa_line(&line) {
+                            match HpoAnnotation::read_str(&line) {
                                 Ok(hal) => lines.push(hal),
-                                Err(e) => {
-                                    errors.push(ValidationIssue::new(line_number, &e));
-                                }
+                                Err(e) => errors.push(ValidationIssue::new(line_number, &e)),
                             }
                         }
                     }
@@ -589,10 +685,15 @@ pub mod io {
 
             if !errors.is_empty() {
                 Err(AnnotationLoadError::ValidationError(errors))
-            } else if let Some(version) = version {
-                Ok(HpoAnnotationLines { lines, version })
             } else {
-                Err(AnnotationLoadError::Error("Missing version".into()))
+                match (version, hpo_version) {
+                    (Some(v), Some(hv)) => Ok(HpoAnnotations {
+                        lines,
+                        version: v,
+                        hpo_version: hv,
+                    }),
+                    _ => Err(AnnotationLoadError::Error("Missing version".into())),
+                }
             }
         }
     }
@@ -600,7 +701,7 @@ pub mod io {
     impl WriteAnnotation<Hpoa> for HpoAnnotation {
         fn write_ann<W>(&self, w: &mut W) -> std::io::Result<()>
         where
-            W: Write
+            W: Write,
         {
             // database_id, disease_name
             write!(w, "{}\t{}\t", self.disease_id, self.disease_name)?;
@@ -660,60 +761,24 @@ pub mod io {
 
             // biocuration
             write_semicolon_separated_array(w, &self.curators)?;
-            write!(w, "\n")?;
+            writeln!(w,)?;
 
             Ok(())
         }
     }
 
-    #[cfg(test)]
-    mod test_hpo_annotation_write {
-        use super::hpoa_examples::{make_complex_hpo_annotation, make_simple_hpo_annotation};
-        use crate::format::Hpoa;
-        use crate::hpo::HpoAnnotation;
-        use crate::io::WriteAnnotation;
+    /// Parse HPO annotation line into `HpoAnnotation`.
+    ///
+    /// # Errors
+    ///
+    /// Parsing fails on malformed HPO annotation line.
+    /// See [`HpoaErrorReason`] for the possible causes.
+    ///
+    impl ReadAnnotation<Hpoa> for HpoAnnotation {
+        type Err = HpoaErrorReason;
 
-        #[test]
-        fn test_write_complex_hpo_annotation() -> std::io::Result<()> {
-            let a = make_complex_hpo_annotation();
-
-            let mut buf = Vec::new();
-            <HpoAnnotation as WriteAnnotation<Hpoa>>::write_ann(&a, &mut buf)?;
-
-            let line = str::from_utf8(&buf).unwrap();
-            assert_eq!(
-                line,
-                "OMIM:303110\tXq21 deletion syndrome\tNOT\tHP:0000365\tPMID:3476958\tPCS\tHP:0003577\t4/8\tMALE\tHP:0012828\tP\tHPO:iea[2009-02-17];HPO:probinson[2021-09-27];HPO:probinson[2021-09-27]\n"
-            );
-            Ok(())
-        }
-
-        #[test]
-        fn test_write_simple_hpo_annotation() -> std::io::Result<()> {
-            let a = make_simple_hpo_annotation();
-
-            let mut buf = Vec::new();
-            <HpoAnnotation as WriteAnnotation<Hpoa>>::write_ann(&a, &mut buf)?;
-
-            let line = str::from_utf8(&buf).unwrap();
-            assert_eq!(
-                line,
-                "OMIM:303110\tXq21 deletion syndrome\t\tHP:0001419\t\t\t\t\t\t\tI\t\n"
-            );
-            Ok(())
-        }
-    }
-
-    impl HpoAnnotation {
-        /// Parse HPO annotation line into `HpoAnnotation`.
-        ///
-        /// # Errors
-        ///
-        /// Parsing fails on malformed HPO annotation line.
-        /// See [`HpoaErrorReason`] for the possible causes.
-        ///
-        pub fn parse_hpoa_line(s: &str) -> Result<Self, HpoaErrorReason> {
-            let fields: Vec<_> = s.trim().split(DELIMITER).collect();
+        fn read_str(val: &str) -> Result<Self, Self::Err> {
+            let fields: Vec<_> = val.trim().split(HPOA_DELIMITER).collect();
             if fields.len() == HPOA_COLUMN_COUNT {
                 // Disease ID
                 let disease_id = fields[DISEASE_ID_COL_IDX]
@@ -749,7 +814,8 @@ pub mod io {
                     Err(e) => match e {
                         FrequencyParseError::EmptyVal => None,
                         FrequencyParseError::FrequencyOutOfBounds
-                        | FrequencyParseError::UnparsableValue => {
+                        | FrequencyParseError::UnparsableValue
+                        | FrequencyParseError::NGreaterThanM => {
                             return Err(HpoaErrorReason::InvalidFrequency(e));
                         }
                     },
@@ -794,29 +860,65 @@ pub mod io {
         }
     }
 
-    /// The HPO annotation corpus with entries parsed to the highest level possible
-    /// while making no wild assumptions about the parsed data.
-    #[derive(Debug, Clone)]
-    pub struct HpoAnnotationLines {
-        /// The HPO annotation records.
-        pub lines: Vec<HpoAnnotation>,
-        /// The HPOA version (e.g. `2023-04-05`)
-        pub version: String,
-    }
-
     #[cfg(test)]
     mod test_hpo_io {
-        use ontolius::TermIdParseError;
-
+        use super::{HpoAnnotation, HpoAnnotations, HpoaErrorReason};
+        use crate::format::Hpoa;
+        use crate::hpo::io::hpoa_examples::{
+            make_complex_hpo_annotation, make_hpo_annotations, make_simple_hpo_annotation,
+        };
         use crate::hpo::{AnnotationReference, Aspect, EvidenceCode, Frequency};
-
-        use super::{HpoAnnotation, HpoaErrorReason};
+        use crate::io::{AnnotationLoader, AnnotationWriter, ReadAnnotation, WriteAnnotation};
+        use ontolius::TermIdParseError;
+        use std::io::BufRead;
 
         #[test]
-        fn parse_hpoa_line_ok() {
+        fn write_hpo_annotations() -> Result<(), Box<dyn std::error::Error>> {
+            let anns = make_hpo_annotations();
+
+            let mut w = Vec::new();
+            anns.store_to_write(&mut w)?;
+
+            let lines: Vec<_> = w.lines().map(|l| l.unwrap()).collect();
+            assert_eq!(
+                &lines,
+                &[
+                    "#description: \"HPO annotations for rare diseases [4: OMIM; 4: ORPHA]\"",
+                    "#version: 2025-05-06",
+                    "#tracker: https://github.com/obophenotype/human-phenotype-ontology/issues",
+                    "#hpo-version: https://purl.obolibrary.org/obo/hp/releases/2025-05-06/hp.json",
+                    "database_id\tdisease_name\tqualifier\thpo_id\treference\tevidence\tonset\tfrequency\tsex\tmodifier\taspect\tbiocuration",
+                    "OMIM:154700\tMarfan syndrome\t\tHP:0002616\tPMID:33436942\tPCS\t\t45/58\t\t\tP\tHPO:probinson[2012-04-24];HPO:probinson[2021-04-01]",
+                    "OMIM:154700\tMarfan syndrome\t\tHP:0001647\tPMID:33436942\tPCS\t\t1/58\t\t\tP\tHPO:probinson[2021-04-01]",
+                    "OMIM:154700\tMarfan syndrome\t\tHP:0000678\tPMID:33436942\tPCS\t\t8/53\t\t\tP\tHPO:probinson[2012-04-24];HPO:probinson[2021-04-01]",
+                    "OMIM:154700\tMarfan syndrome\t\tHP:0008138\tPMID:28050285\tPCS\t\t31/146\t\t\tP\tHPO:probinson[2021-05-27]",
+                    "ORPHA:79414\tWoolly hair nevus\t\tHP:0002212\tORPHA:79414\tTAS\t\tHP:0040281\t\t\tP\tORPHA:orphadata[2025-05-06]",
+                    "ORPHA:79414\tWoolly hair nevus\t\tHP:0002213\tORPHA:79414\tTAS\t\tHP:0040281\t\t\tP\tORPHA:orphadata[2025-05-06]",
+                    "ORPHA:79414\tWoolly hair nevus\t\tHP:0011365\tORPHA:79414\tTAS\t\tHP:0040281\t\t\tP\tORPHA:orphadata[2025-05-06]",
+                    "ORPHA:79414\tWoolly hair nevus\t\tHP:0040149\tORPHA:79414\tTAS\t\tHP:0040281\t\t\tP\tORPHA:orphadata[2025-05-06]",
+                ]
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn roundtrip_hpo_annotations() -> Result<(), Box<dyn std::error::Error>> {
+            let expected = make_hpo_annotations();
+
+            let mut w = Vec::new();
+            expected.store_to_write(&mut w)?;
+
+            let actual = HpoAnnotations::load_from_buf_read(&mut &w[..])?;
+
+            assert_eq!(actual, expected);
+            Ok(())
+        }
+
+        #[test]
+        fn read_hpoa_str_line_ok() {
             let line = "OMIM:154700\tMarfan syndrome\t\tHP:0001377\tPMID:28050285;PMID:33436942\tPCS\t\t29/199\t\t\tP\tHPO:probinson[2021-05-27];HPO:probinson[2021-04-01]";
 
-            let hpo_line: Result<HpoAnnotation, _> = HpoAnnotation::parse_hpoa_line(line);
+            let hpo_line: Result<HpoAnnotation, _> = HpoAnnotation::read_str(line);
 
             assert!(hpo_line.is_ok());
 
@@ -836,10 +938,7 @@ pub mod io {
             assert_eq!(hpo_line.frequency.is_some(), true);
             assert_eq!(
                 &hpo_line.frequency.unwrap(),
-                &Frequency::Ratio {
-                    numerator: 29,
-                    denominator: 199
-                }
+                &Frequency::Ratio { n: 29, m: 199 }
             );
 
             assert!(hpo_line.sex.is_none());
@@ -855,9 +954,9 @@ pub mod io {
         }
 
         #[test]
-        fn parse_hpoa_line_bad_disease_id() {
+        fn read_str_bad_disease_id() {
             let line = "OMIM-154700\tMarfan syndrome\t\tHP:0001377\tPMID:28050285;PMID:33436942\tPCS\t\t29/199\t\t\tP\tHPO:probinson[2021-05-27];HPO:probinson[2021-04-01]";
-            let hpo_line: Result<_, _> = HpoAnnotation::parse_hpoa_line(line);
+            let hpo_line: Result<_, _> = HpoAnnotation::read_str(line);
 
             assert!(hpo_line.is_err());
             assert_eq!(
@@ -865,13 +964,45 @@ pub mod io {
                 HpoaErrorReason::InvalidDiseaseId(TermIdParseError::MissingDelimiter)
             );
         }
+
+        #[test]
+        fn test_write_complex_hpo_annotation() -> std::io::Result<()> {
+            let a = make_complex_hpo_annotation();
+
+            let mut buf = Vec::new();
+            <HpoAnnotation as WriteAnnotation<Hpoa>>::write_ann(&a, &mut buf)?;
+
+            let line = str::from_utf8(&buf).unwrap();
+            assert_eq!(
+                line,
+                "OMIM:303110\tXq21 deletion syndrome\tNOT\tHP:0000365\tPMID:3476958\tPCS\tHP:0003577\t4/8\tMALE\tHP:0012828\tP\tHPO:iea[2009-02-17];HPO:probinson[2021-09-27];HPO:probinson[2021-09-27]\n"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn test_write_simple_hpo_annotation() -> std::io::Result<()> {
+            let a = make_simple_hpo_annotation();
+
+            let mut buf = Vec::new();
+            <HpoAnnotation as WriteAnnotation<Hpoa>>::write_ann(&a, &mut buf)?;
+
+            let line = str::from_utf8(&buf).unwrap();
+            assert_eq!(
+                line,
+                "OMIM:303110\tXq21 deletion syndrome\t\tHP:0001419\t\t\t\t\t\t\tI\t\n"
+            );
+            Ok(())
+        }
     }
 
     #[cfg(test)]
     mod hpoa_examples {
+        use crate::hpo::io::HpoAnnotations;
         use crate::hpo::{
             AnnotationReference, Aspect, EvidenceCode, Frequency, HpoAnnotation, Sex,
         };
+        use crate::io::ReadAnnotation;
 
         pub(super) fn make_complex_hpo_annotation() -> HpoAnnotation {
             HpoAnnotation {
@@ -884,10 +1015,7 @@ pub mod io {
                     EvidenceCode::PCS,
                 )],
                 onset: Some(("HP", "0003577").into()),
-                frequency: Some(Frequency::Ratio {
-                    numerator: 4,
-                    denominator: 8,
-                }),
+                frequency: Some(Frequency::Ratio { n: 4, m: 8 }),
                 sex: Some(Sex::Male),
                 modifiers: vec![("HP", "0012828").into()],
                 aspect: Aspect::Phenotype,
@@ -914,8 +1042,37 @@ pub mod io {
                 curators: vec![],
             }
         }
-    }
 
+        pub(super) fn make_hpo_annotations() -> HpoAnnotations {
+            let mut lines = Vec::new();
+            lines.extend(marfan_annotations());
+            lines.extend(wooly_annotations());
+            HpoAnnotations {
+                lines,
+                version: "2025-05-06".to_string(),
+                hpo_version: "2025-05-06".to_string(),
+            }
+        }
+        fn marfan_annotations() -> impl Iterator<Item = HpoAnnotation> {
+            [
+                "OMIM:154700\tMarfan syndrome\t\tHP:0002616\tPMID:33436942\tPCS\t\t45/58\t\t\tP\tHPO:probinson[2012-04-24];HPO:probinson[2021-04-01]",
+                "OMIM:154700\tMarfan syndrome\t\tHP:0001647\tPMID:33436942\tPCS\t\t1/58\t\t\tP\tHPO:probinson[2021-04-01]",
+                "OMIM:154700\tMarfan syndrome\t\tHP:0000678\tPMID:33436942\tPCS\t\t8/53\t\t\tP\tHPO:probinson[2012-04-24];HPO:probinson[2021-04-01]",
+                "OMIM:154700\tMarfan syndrome\t\tHP:0008138\tPMID:28050285\tPCS\t\t31/146\t\t\tP\tHPO:probinson[2021-05-27]",
+            ].into_iter()
+                .map(|line| HpoAnnotation::read_str(line).unwrap())
+        }
+
+        fn wooly_annotations() -> impl Iterator<Item = HpoAnnotation> {
+            [
+                "ORPHA:79414\tWoolly hair nevus\t\tHP:0002212\tORPHA:79414\tTAS\t\tHP:0040281\t\t\tP\tORPHA:orphadata[2025-05-06]",
+                "ORPHA:79414\tWoolly hair nevus\t\tHP:0002213\tORPHA:79414\tTAS\t\tHP:0040281\t\t\tP\tORPHA:orphadata[2025-05-06]",
+                "ORPHA:79414\tWoolly hair nevus\t\tHP:0011365\tORPHA:79414\tTAS\t\tHP:0040281\t\t\tP\tORPHA:orphadata[2025-05-06]",
+                "ORPHA:79414\tWoolly hair nevus\t\tHP:0040149\tORPHA:79414\tTAS\t\tHP:0040281\t\t\tP\tORPHA:orphadata[2025-05-06]",
+            ].into_iter()
+                .map(|line| HpoAnnotation::read_str(line).unwrap())
+        }
+    }
 
     fn format_sex<W>(w: &mut W, sex: &Sex) -> std::io::Result<()>
     where
@@ -932,14 +1089,7 @@ pub mod io {
     where
         W: Write,
     {
-        match frequency {
-            Frequency::TermId(term_id) => write!(w, "{}", term_id),
-            Frequency::Ratio {
-                numerator,
-                denominator,
-            } => write!(w, "{}/{}", numerator, denominator),
-            Frequency::Frequency(freq) => write!(w, "{:.1}%", freq * 100f64),
-        }
+        write!(w, "{frequency}")
     }
 
     fn write_annotation_reference_evidence_code<W>(
