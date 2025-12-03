@@ -128,9 +128,16 @@ impl AnnotationReference {
     }
 }
 
-/// Frequency of a phenotypic abnormality.
+/// The ways to encode frequency of an HPO annotation.
+///
+/// The annotation frequency can be in one of the following forms:
+/// * [`FrequencyData::TermId`] - a term ID (e.g. [Obligate \[HP:0040280\]](https://hpo.jax.org/browse/term/HP:0040280))
+/// * [`FrequencyData::Ratio`] - an `n` over `m` (e.g. `7` out of `13` investigated individuals presented with the feature)
+/// * [`FrequencyData::Percentage`] - a percentage (e.g. 13% of the individuals presented with the feature)
+///
+/// The [`FrequencyData::Ratio`] is preferred over the other forms.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Frequency {
+pub enum FrequencyData {
     /// Frequency data as [`TermId`], a member of HPO's
     /// [Frequency \[HP:0040279\]](https://hpo.jax.org/browse/term/HP:0040279) submodule.
     TermId(TermId),
@@ -142,6 +149,8 @@ pub enum Frequency {
     ///
     /// Note, that `1/2` and `2/4` do not represent the same information.
     /// The cohort size is `2` in the former while `4` individuals were investigated in the latter.
+    ///
+    /// `n` SHOULD be less than or equal to `m`.
     Ratio {
         /// Count of individuals with the annotation.
         n: u32,
@@ -153,12 +162,148 @@ pub enum Frequency {
     /// found to have the phenotypic abnormality referred to by the HPO term in question
     /// in the study referred to by the DB reference.
     ///
-    /// If possible, the 7/13 format (see [`Frequency::Ratio`]) is preferred over the percentage format
+    /// If possible, the 7/13 format (see [`FrequencyData::Ratio`]) is preferred over the percentage format
     /// if the exact data is available.
     ///
-    /// Should be a value in range of `[0..100]`. E.g. `7.` to represent 7%.
-    /// The range is, however, *NOT* enforced in any fashion!
+    /// The percentage SHOULD be a value in range of `[0..100]` (e.g. `7.` to represent 7%.).
     Percentage(f64),
+}
+
+impl From<TermId> for FrequencyData {
+    fn from(value: TermId) -> Self {
+        Self::TermId(value)
+    }
+}
+
+/// Frequency of a phenotypic abnormality.
+///
+/// The frequency is guaranteed to meet the following invariants:
+///
+/// * in [`FrequencyData::Ratio`], `n` is less than or equal to `m`
+/// * in [`FrequencyData::Percentage`], the value is in the range of \[0, 100\]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Frequency(FrequencyData);
+
+impl Frequency {
+    /// Get the frequency data.
+    pub fn data(&self) -> &FrequencyData {
+        &self.0
+    }
+
+    /// Create `Frequency` from `n` over `m`.
+    ///
+    ///
+    /// # Example
+    ///
+    /// Create frequency for annotation that was observed in `4` out of `8` tested individuals:
+    ///
+    /// ```
+    /// use oboannotation::hpo::{Frequency, FrequencyData};
+    ///
+    /// let freq: Result<Frequency, _> = Frequency::from_ratio(4u8, 8u8);
+    ///
+    /// assert!(freq.is_ok());
+    /// assert_eq!(freq.unwrap().data(), &FrequencyData::Ratio {n: 4, m: 8});
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Fails if `n` is greater than `m`:
+    ///
+    /// ```
+    /// use oboannotation::hpo::{Frequency, FrequencyData, FrequencyParseError};
+    ///
+    /// let freq: Result<Frequency, FrequencyParseError> = Frequency::from_ratio(9u8, 8u8);
+    ///
+    /// assert!(freq.is_err());
+    /// assert_eq!(freq.unwrap_err(), FrequencyParseError::NGreaterThanM);
+    /// ```
+    pub fn from_ratio(n: impl Into<u32>, m: impl Into<u32>) -> Result<Self, FrequencyParseError> {
+        let (n, m) = (n.into(), m.into());
+        if n <= m {
+            Ok(Self(FrequencyData::Ratio { n, m }))
+        } else {
+            Err(FrequencyParseError::NGreaterThanM)
+        }
+    }
+
+    /// Create `Frequency` from a percentage.
+    ///
+    /// # Example
+    ///
+    /// Create frequency for annotation that was observed in 49.5% of individuals:
+    ///
+    /// ```
+    /// use oboannotation::hpo::{Frequency, FrequencyData};
+    ///
+    /// let freq: Result<Frequency, _> = Frequency::from_percentage(49.5);
+    ///
+    /// assert!(freq.is_ok());
+    /// assert_eq!(freq.unwrap().data(), &FrequencyData::Percentage(49.5));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Fails if the percentage is not in range of \[0, 100\]:
+    ///
+    /// ```
+    /// use oboannotation::hpo::{Frequency, FrequencyData, FrequencyParseError};
+    ///
+    /// let freq: Result<Frequency, FrequencyParseError> = Frequency::from_percentage(100.01);
+    ///
+    /// assert!(freq.is_err());
+    /// assert_eq!(freq.unwrap_err(), FrequencyParseError::PercentageOutOfBounds);
+    /// ```
+    pub fn from_percentage(percentage: impl Into<f64>) -> Result<Self, FrequencyParseError> {
+        let percentage = percentage.into();
+
+        if f64::is_sign_positive(percentage) && percentage <= 100.0 {
+            Ok(Self(FrequencyData::Percentage(percentage)))
+        } else {
+            Err(FrequencyParseError::PercentageOutOfBounds)
+        }
+    }
+}
+
+/// Format the frequency.
+///
+/// # Examples
+///
+/// ```
+/// use ontolius::TermId;
+/// use oboannotation::hpo::Frequency;
+///
+/// let freq: Frequency = Frequency::from_ratio(7u8, 13u8).unwrap();
+///
+/// assert_eq!(freq.to_string().as_str(), "7/13");
+/// ```
+impl Display for Frequency {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            FrequencyData::TermId(t) => write!(f, "{}", t),
+            FrequencyData::Ratio { n, m } => write!(f, "{n}/{m}"),
+            FrequencyData::Percentage(percentage) => write!(f, "{:.1}%", percentage),
+        }
+    }
+}
+
+/// Convert [`FrequencyData`] to `Frequency` and validate its invariants.
+impl TryFrom<FrequencyData> for Frequency {
+    type Error = FrequencyParseError;
+
+    fn try_from(value: FrequencyData) -> Result<Self, Self::Error> {
+        match value {
+            FrequencyData::TermId(t) => Ok(Self(FrequencyData::TermId(t))),
+            FrequencyData::Ratio { n, m } => Self::from_ratio(n, m),
+            FrequencyData::Percentage(val) => Self::from_percentage(val),
+        }
+    }
+}
+
+impl From<TermId> for Frequency {
+    fn from(value: TermId) -> Self {
+        Self(value.into())
+    }
 }
 
 /// The possible reasons for failing to parse a frequency from a `&str`.
@@ -168,8 +313,8 @@ pub enum FrequencyParseError {
     EmptyVal,
     #[error("`m` is greater than `n`")]
     NGreaterThanM,
-    #[error("Frequency not in range [0, 100]")]
-    FrequencyOutOfBounds,
+    #[error("Percentage not in range [0, 100]")]
+    PercentageOutOfBounds,
     #[error("Unparsable value")]
     UnparsableValue,
 }
@@ -189,7 +334,7 @@ static FREQUENCY_PT: LazyLock<Regex> = LazyLock::new(|| {
 /// The parsing fails if the payload does not correspond to one of the supported input formats:
 /// * ratio - `n`/`m` (e.g. `7/13`) to represent presence of a feature in `n` individuals
 ///   out of `m` tested for feature's presence.
-/// * percentage - e.g. 53.85%. Percent sign `%` is obligatory. The value must be between $[0, 100.0]$.
+/// * percentage - e.g. 53.85%. Percent sign `%` is obligatory. The value must be between \[0, 100\].
 /// * term ID - e.g. `HP:0040284` for [Very rare (HP:0040284)](https://hpo.jax.org/browse/term/HP:0040284).
 ///
 /// # Note
@@ -205,17 +350,17 @@ static FREQUENCY_PT: LazyLock<Regex> = LazyLock::new(|| {
 /// Parse a ratio such as `7/13`:
 ///
 /// ```
-/// use oboannotation::hpo::Frequency;
+/// use oboannotation::hpo::{Frequency, FrequencyData};
 ///
 /// let frequency: Result<Frequency, _> = "7/13".parse();
 /// assert!(frequency.is_ok());
 ///
 /// let frequency = frequency.unwrap();
 ///
-/// assert_eq!(frequency, Frequency::Ratio {n: 7, m: 13});
+/// assert_eq!(frequency.data(), &FrequencyData::Ratio {n: 7, m: 13});
 /// ```
 ///
-/// Fails if $n>m$:
+/// Fails if `n > m`:
 /// ```
 /// use oboannotation::hpo::{Frequency, FrequencyParseError};
 ///
@@ -229,13 +374,13 @@ static FREQUENCY_PT: LazyLock<Regex> = LazyLock::new(|| {
 /// Parse a percentage value, such as `53.85%`.
 ///
 /// ```
-/// use oboannotation::hpo::Frequency;
+/// use oboannotation::hpo::{Frequency, FrequencyData};
 ///
 /// let frequency: Result<Frequency, _> = "53.85%".parse();
 /// assert!(frequency.is_ok());
 ///
 /// let frequency = frequency.unwrap();
-/// assert!(matches!(frequency, Frequency::Percentage(53.85)));
+/// assert_eq!(frequency.data(), &FrequencyData::Percentage(53.85));
 /// ```
 ///
 /// ## Term id
@@ -244,14 +389,14 @@ static FREQUENCY_PT: LazyLock<Regex> = LazyLock::new(|| {
 ///
 /// ```
 /// use ontolius::TermId;
-/// use oboannotation::hpo::Frequency;
+/// use oboannotation::hpo::{Frequency, FrequencyData};
 ///
 /// let frequency: Result<Frequency, _> = "HP:0040284".parse();
 /// assert!(frequency.is_ok());
 ///
 /// let frequency = frequency.unwrap();
 /// let very_rare: TermId = "HP:0040284".parse().unwrap();
-/// assert!(matches!(frequency, Frequency::TermId(very_rare)));
+/// assert_eq!(frequency.data(), &FrequencyData::TermId(very_rare));
 /// ```
 ///
 impl FromStr for Frequency {
@@ -261,29 +406,21 @@ impl FromStr for Frequency {
         if s.is_empty() {
             Err(FrequencyParseError::EmptyVal)
         } else if let Some(cap) = RATIO_PT.captures(s) {
-            let n = cap["numerator"]
+            let n: u32 = cap["numerator"]
                 .parse()
                 .expect("Regexp should ensure that numerator is parsable into a `u32` value");
-            let m = cap["denominator"]
+            let m: u32 = cap["denominator"]
                 .parse()
                 .expect("Regexp should ensure that denominator is parsable into a `u32` value");
-            if n > m {
-                Err(FrequencyParseError::NGreaterThanM)
-            } else {
-                Ok(Self::Ratio { n, m })
-            }
+            Frequency::from_ratio(n, m)
         } else if let Some(cap) = FREQUENCY_PT.captures(s) {
             let frequency: f64 = cap["frequency"]
                 .parse()
                 .expect("Regexp pattern should ensure that frequency is parsable into f64");
-            if (0. ..=100.).contains(&frequency) {
-                Ok(Self::Percentage(frequency))
-            } else {
-                Err(FrequencyParseError::FrequencyOutOfBounds)
-            }
+            Frequency::from_percentage(frequency)
         } else {
             // Fall back to TermId
-            match s.parse().map(Self::TermId) {
+            match s.parse().map(|t| Self(FrequencyData::TermId(t))) {
                 Ok(frequency) => Ok(frequency),
                 Err(_) => Err(FrequencyParseError::UnparsableValue),
             }
@@ -291,31 +428,9 @@ impl FromStr for Frequency {
     }
 }
 
-/// Format a `Frequency`.
-///
-/// # Examples
-///
-/// ```
-/// use ontolius::TermId;
-/// use oboannotation::hpo::Frequency;
-///
-/// let freq: Frequency = Frequency::TermId("HP:0040284".parse().unwrap());
-///
-/// assert_eq!(freq.to_string().as_str(), "HP:0040284");
-/// ```
-impl Display for Frequency {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TermId(t) => write!(f, "{}", t),
-            Self::Ratio { n, m } => write!(f, "{n}/{m}"),
-            Self::Percentage(percentage) => write!(f, "{:.1}%", percentage),
-        }
-    }
-}
-
 #[cfg(test)]
 mod test_frequency {
-    use crate::hpo::{Frequency, FrequencyParseError};
+    use super::{Frequency, FrequencyData, FrequencyParseError};
 
     #[test]
     fn from_str_empty() {
@@ -334,14 +449,14 @@ mod test_frequency {
     }
 
     #[test]
-    fn from_str_frequency_out_of_bounds() {
+    fn from_str_percentage_out_of_bounds() {
         assert_eq!(
-            "-1.11%".parse::<Frequency>().unwrap_err(),
-            FrequencyParseError::FrequencyOutOfBounds
+            "-0%".parse::<Frequency>().unwrap_err(),
+            FrequencyParseError::PercentageOutOfBounds
         );
         assert_eq!(
             "100.01%".parse::<Frequency>().unwrap_err(),
-            FrequencyParseError::FrequencyOutOfBounds
+            FrequencyParseError::PercentageOutOfBounds
         );
     }
 
@@ -351,6 +466,22 @@ mod test_frequency {
         assert!(f.is_err());
 
         assert_eq!(f.unwrap_err(), FrequencyParseError::UnparsableValue);
+    }
+
+    #[test]
+    fn test_creating_from_negative_zero_percent() {
+        let result = Frequency::from_percentage(-0.);
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            FrequencyParseError::PercentageOutOfBounds
+        );
+    }
+
+    #[test]
+    fn test_we_pay_nothing_for_the_frequency_wrapper() {
+        assert_eq!(size_of::<Frequency>(), size_of::<FrequencyData>());
     }
 }
 
@@ -384,7 +515,7 @@ pub struct HpoAnnotations {
 /// Parse disease-phenotype annotations from HPO annotation file.
 pub mod io {
     use super::{
-        AnnotationReference, Aspect, EvidenceCode, Frequency, FrequencyParseError, HpoAnnotation,
+        AnnotationReference, Aspect, EvidenceCode, FrequencyParseError, HpoAnnotation,
         HpoAnnotations, Sex,
     };
     use crate::io::{AnnotationWriter, ReadAnnotation};
@@ -484,7 +615,7 @@ pub mod io {
                     FrequencyParseError::EmptyVal => {
                         write!(f, "Empty value: {}", self.fields[FREQUENCY_COL_IDX])
                     }
-                    FrequencyParseError::FrequencyOutOfBounds => write!(
+                    FrequencyParseError::PercentageOutOfBounds => write!(
                         f,
                         "Frequency out of bounds: {}",
                         self.fields[FREQUENCY_COL_IDX]
@@ -521,7 +652,7 @@ pub mod io {
         }
     }
 
-    /// The reasons for failure in parsing of HPO annotation line in [`HpoAnnotation::parse_hpoa_line`].
+    /// The reasons for failure in parsing of HPO annotation line in [`HpoAnnotation::read_str`].
     #[derive(Debug, thiserror::Error, PartialEq)]
     pub enum HpoaErrorReason {
         #[error("Cannot parse a record with {0}!={col_cnt}", col_cnt=HPOA_COLUMN_COUNT)]
@@ -735,7 +866,7 @@ pub mod io {
 
             // frequency
             if let Some(frequency) = &self.frequency {
-                format_frequency(w, frequency)?;
+                write!(w, "{frequency}")?
             }
             write!(w, "\t")?;
 
@@ -813,7 +944,7 @@ pub mod io {
                     Ok(frequency) => Some(frequency),
                     Err(e) => match e {
                         FrequencyParseError::EmptyVal => None,
-                        FrequencyParseError::FrequencyOutOfBounds
+                        FrequencyParseError::PercentageOutOfBounds
                         | FrequencyParseError::UnparsableValue
                         | FrequencyParseError::NGreaterThanM => {
                             return Err(HpoaErrorReason::InvalidFrequency(e));
@@ -867,17 +998,17 @@ pub mod io {
         use crate::hpo::io::hpoa_examples::{
             make_complex_hpo_annotation, make_hpo_annotations, make_simple_hpo_annotation,
         };
-        use crate::hpo::{AnnotationReference, Aspect, EvidenceCode, Frequency};
+        use crate::hpo::{AnnotationReference, Aspect, EvidenceCode, FrequencyData};
         use crate::io::{AnnotationLoader, AnnotationWriter, ReadAnnotation, WriteAnnotation};
         use ontolius::TermIdParseError;
         use std::io::BufRead;
 
         #[test]
         fn write_hpo_annotations() -> Result<(), Box<dyn std::error::Error>> {
-            let anns = make_hpo_annotations();
+            let annotations = make_hpo_annotations();
 
             let mut w = Vec::new();
-            anns.store_to_write(&mut w)?;
+            annotations.store_to_write(&mut w)?;
 
             let lines: Vec<_> = w.lines().map(|l| l.unwrap()).collect();
             assert_eq!(
@@ -937,8 +1068,8 @@ pub mod io {
             assert!(hpo_line.onset.is_none());
             assert_eq!(hpo_line.frequency.is_some(), true);
             assert_eq!(
-                &hpo_line.frequency.unwrap(),
-                &Frequency::Ratio { n: 29, m: 199 }
+                hpo_line.frequency.unwrap().data(),
+                &FrequencyData::Ratio { n: 29, m: 199 }
             );
 
             assert!(hpo_line.sex.is_none());
@@ -1015,7 +1146,7 @@ pub mod io {
                     EvidenceCode::PCS,
                 )],
                 onset: Some(("HP", "0003577").into()),
-                frequency: Some(Frequency::Ratio { n: 4, m: 8 }),
+                frequency: Some(Frequency::from_ratio(4u8, 8u8).unwrap()),
                 sex: Some(Sex::Male),
                 modifiers: vec![("HP", "0012828").into()],
                 aspect: Aspect::Phenotype,
@@ -1083,13 +1214,6 @@ pub mod io {
             Sex::Male => write!(w, "MALE"),
             Sex::Female => write!(w, "FEMALE"),
         }
-    }
-
-    fn format_frequency<W>(w: &mut W, frequency: &Frequency) -> std::io::Result<()>
-    where
-        W: Write,
-    {
-        write!(w, "{frequency}")
     }
 
     fn write_annotation_reference_evidence_code<W>(

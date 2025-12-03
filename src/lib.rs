@@ -25,7 +25,7 @@
 //! assert_eq!(data.lines.len(), 86); // Toy HPOA includes 86 records
 //! ```
 //!
-//! See [`HpoAnnotationLines`][`crate::hpo::HpoAnnotationLines`] and [`HpoAnnotation`][`crate::hpo::HpoAnnotation`]
+//! See [`HpoAnnotations`][`crate::hpo::HpoAnnotations`] and [`HpoAnnotation`][`crate::hpo::HpoAnnotation`]
 //! to learn more about the data format.
 //!
 //! ## Load GO annotations

@@ -2,12 +2,9 @@ const _FPATH_SMALL_HPO: &str = "data/hp.small.json";
 const FPATH_SMALL_HPOA: &str = "data/phenotype.real-shortlist.hpoa";
 
 mod hpo_annotation_parser {
-    use oboannotation::{
-        hpo::{Frequency, HpoAnnotations},
-        io::AnnotationLoader,
-    };
-
     use super::FPATH_SMALL_HPOA;
+    use oboannotation::hpo::FrequencyData;
+    use oboannotation::{hpo::HpoAnnotations, io::AnnotationLoader};
 
     #[test]
     fn load_from_path() {
@@ -26,12 +23,8 @@ mod hpo_annotation_parser {
         assert_eq!(first.disease_id.to_string().as_str(), "OMIM:154700");
         assert_eq!(first.disease_name.as_str(), "Marfan syndrome");
         assert_eq!(first.annotation_references.len(), 2);
-        assert_eq!(
-            first.frequency.as_ref().expect("Should be present"),
-            &Frequency::Ratio {
-                n: 29,
-                m: 199
-            }
-        )
+
+        let frequency_data = first.frequency.as_ref().unwrap().data();
+        assert_eq!(frequency_data, &FrequencyData::Ratio { n: 29, m: 199 })
     }
 }
