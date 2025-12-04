@@ -3,6 +3,8 @@
 use ontolius::TermId;
 use regex::Regex;
 use std::fmt::{Display, Formatter};
+use std::hash::Hash;
+use std::marker::PhantomData;
 use std::{str::FromStr, sync::LazyLock};
 
 /// Evidence codes used in HPO.
@@ -138,6 +140,11 @@ impl AnnotationReference {
 /// The [`FrequencyData::Ratio`] is preferred over the other forms.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FrequencyData {
+    /*
+    Notes
+    `FrequencyData` cannot implement `Eq` because `FrequencyData::Percentage` can be created with a `f64:NAN`.
+    Nor can `Hash` be implemented due to `f64`.
+     */
     /// Frequency data as [`TermId`], a member of HPO's
     /// [Frequency \[HP:0040279\]](https://hpo.jax.org/browse/term/HP:0040279) submodule.
     TermId(TermId),
@@ -480,12 +487,34 @@ mod test_frequency {
     }
 
     #[test]
+    fn test_cannot_create_from_nan_or_infinity() {
+        assert_eq!(
+            Frequency::from_percentage(f64::NAN).unwrap_err(),
+            FrequencyParseError::PercentageOutOfBounds
+        );
+        assert_eq!(
+            Frequency::from_percentage(f64::INFINITY).unwrap_err(),
+            FrequencyParseError::PercentageOutOfBounds
+        );
+        assert_eq!(
+            Frequency::from_percentage(f64::NEG_INFINITY).unwrap_err(),
+            FrequencyParseError::PercentageOutOfBounds
+        );
+    }
+
+    #[test]
+    fn test_can_create_percentage_from_min_positive() {
+        assert!(Frequency::from_percentage(f64::MIN_POSITIVE).is_ok());
+    }
+
+    #[test]
     fn test_we_pay_nothing_for_the_frequency_wrapper() {
         assert_eq!(size_of::<Frequency>(), size_of::<FrequencyData>());
     }
 }
 
-/// Annotation of a disease with HPO term, including the annotation modifiers.
+/// Annotation of a disease with HPO term, including the annotation modifiers, onset, sex,
+/// clinical modifiers and the curators.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HpoAnnotation {
     pub disease_id: TermId,
@@ -499,6 +528,279 @@ pub struct HpoAnnotation {
     pub modifiers: Vec<TermId>,
     pub aspect: Aspect,
     pub curators: Vec<String>,
+}
+
+impl HpoAnnotation {
+    /// Create a builder for building the [`HpoAnnotation`].
+    pub fn builder() -> HpoAnnotationBuilder<Unset, Unset, Unset> {
+        HpoAnnotationBuilder {
+            disease: None,
+            is_negated: false,
+            phenotype_term_id: None,
+            annotation_references: vec![],
+            onset: None,
+            frequency: None,
+            sex: None,
+            modifiers: vec![],
+            aspect: None,
+            curators: vec![],
+            state: PhantomData,
+        }
+    }
+}
+
+/// A marker struct to indicate that a required field of [`HpoAnnotation] was set.
+pub struct Set;
+
+/// A marker struct to indicate that a required field of [`HpoAnnotation] was not set.
+pub struct Unset;
+
+/// A builder for [`HpoAnnotation`].
+///
+/// Three required fields must be set on the builder ...
+/// * [`HpoAnnotationBuilder::disease`]
+/// * [`HpoAnnotationBuilder::phenotype`]
+/// * [`HpoAnnotationBuilder::aspect`]
+///
+/// ... before the annotation can be built with [`HpoAnnotationBuilder::build`].
+pub struct HpoAnnotationBuilder<D, P, A> {
+    // The builder has a generic parameter for each required field/condition.
+    disease: Option<(TermId, String)>,
+    is_negated: bool,
+    phenotype_term_id: Option<TermId>,
+    annotation_references: Vec<AnnotationReference>,
+    onset: Option<TermId>,
+    frequency: Option<Frequency>,
+    sex: Option<Sex>,
+    modifiers: Vec<TermId>,
+    aspect: Option<Aspect>,
+    curators: Vec<String>,
+    state: PhantomData<(D, P, A)>,
+}
+
+impl<P, A> HpoAnnotationBuilder<Unset, P, A> {
+    /// Set the disease identifier (e.g. `OMIM:154700`) and its name (e.g. `Marfan syndrome`).
+    pub fn disease(
+        self,
+        disease_id: impl Into<TermId>,
+        name: impl ToString,
+    ) -> HpoAnnotationBuilder<Set, P, A> {
+        HpoAnnotationBuilder {
+            disease: Some((disease_id.into(), name.to_string())),
+            is_negated: self.is_negated,
+            phenotype_term_id: self.phenotype_term_id,
+            annotation_references: self.annotation_references,
+            onset: self.onset,
+            frequency: self.frequency,
+            sex: self.sex,
+            modifiers: self.modifiers,
+            aspect: self.aspect,
+            curators: self.curators,
+            state: PhantomData,
+        }
+    }
+}
+
+impl<D, A> HpoAnnotationBuilder<D, Unset, A> {
+    /// Set the phenotype annotation term id.
+    pub fn phenotype(self, phenotype: impl Into<TermId>) -> HpoAnnotationBuilder<D, Set, A> {
+        HpoAnnotationBuilder {
+            disease: self.disease,
+            is_negated: self.is_negated,
+            phenotype_term_id: Some(phenotype.into()),
+            annotation_references: self.annotation_references,
+            onset: self.onset,
+            frequency: self.frequency,
+            sex: self.sex,
+            modifiers: self.modifiers,
+            aspect: self.aspect,
+            curators: self.curators,
+            state: PhantomData,
+        }
+    }
+}
+
+impl<D, P> HpoAnnotationBuilder<D, P, Unset> {
+    /// Set the aspect of the HPO annotation.
+    pub fn aspect(self, aspect: Aspect) -> HpoAnnotationBuilder<D, P, Set> {
+        HpoAnnotationBuilder {
+            disease: self.disease,
+            is_negated: self.is_negated,
+            phenotype_term_id: self.phenotype_term_id,
+            annotation_references: self.annotation_references,
+            onset: self.onset,
+            frequency: self.frequency,
+            sex: self.sex,
+            modifiers: self.modifiers,
+            aspect: Some(aspect),
+            curators: self.curators,
+            state: PhantomData,
+        }
+    }
+
+    /// Set aspect to [`Aspect::Phenotype`].
+    pub fn aspect_phenotype(self) -> HpoAnnotationBuilder<D, P, Set> {
+        self.aspect(Aspect::Phenotype)
+    }
+
+    /// Set aspect to [`Aspect::ClinicalCourse`].
+    pub fn aspect_clinical_course(self) -> HpoAnnotationBuilder<D, P, Set> {
+        self.aspect(Aspect::ClinicalCourse)
+    }
+
+    /// Set aspect to [`Aspect::Inheritance`].
+    pub fn aspect_inheritance(self) -> HpoAnnotationBuilder<D, P, Set> {
+        self.aspect(Aspect::Inheritance)
+    }
+}
+
+impl<D, P, A> HpoAnnotationBuilder<D, P, A> {
+    /// Indicate that the phenotype is *NOT* a characteristic of the annotated disease.
+    pub fn negated(mut self) -> Self {
+        self.is_negated = true;
+        self
+    }
+
+    /// Indicate that the phenotype is a characteristic of the annotated disease.
+    ///
+    /// The phenotype is observed by default and this method does not have to be set.
+    pub fn not_negated(mut self) -> Self {
+        self.is_negated = false;
+        self
+    }
+
+    /// Add an annotation reference to the annotation.
+    pub fn push_annotation_reference(mut self, annotation_reference: AnnotationReference) -> Self {
+        self.annotation_references.push(annotation_reference);
+        self
+    }
+
+    /// Add multiple annotation references to the annotation.
+    pub fn extend_annotation_references(
+        mut self,
+        annotation_references: impl IntoIterator<Item = AnnotationReference>,
+    ) -> Self {
+        self.annotation_references.extend(annotation_references);
+        self
+    }
+
+    /// Clear all previously added annotation references.
+    pub fn clear_annotation_references(mut self) -> Self {
+        self.annotation_references.clear();
+        self
+    }
+
+    /// Set the onset of the annotation. The `onset` should be a member of HPO's
+    /// [Onset](https://hpo.jax.org/browse/term/HP:0003674) module.
+    pub fn onset(mut self, onset: impl Into<TermId>) -> Self {
+        self.onset = Some(onset.into());
+        self
+    }
+
+    /// Set the frequency of the annotation.
+    pub fn frequency(mut self, frequency: impl Into<Frequency>) -> Self {
+        self.frequency = Some(frequency.into());
+        self
+    }
+
+    /// Set sex of the annotation.
+    pub fn sex(mut self, sex: Sex) -> Self {
+        self.sex = Some(sex);
+        self
+    }
+
+    /// Set sex to [`Sex::Male`].
+    pub fn sex_male(self) -> Self {
+        self.sex(Sex::Male)
+    }
+
+    /// Set sex to [`Sex::Female`].
+    pub fn sex_female(self) -> Self {
+        self.sex(Sex::Female)
+    }
+
+    /// Set sex to [`Sex::Unknown`].
+    pub fn sex_unknown(self) -> Self {
+        self.sex(Sex::Unknown)
+    }
+
+    /// Add a clinical modifier.
+    pub fn push_modifier(mut self, modifier: impl Into<TermId>) -> Self {
+        self.modifiers.push(modifier.into());
+        self
+    }
+
+    /// Add several clinical modifiers.
+    pub fn extend_modifiers(
+        mut self,
+        modifiers: impl IntoIterator<Item = impl Into<TermId>>,
+    ) -> Self {
+        self.modifiers
+            .extend(modifiers.into_iter().map(|v| v.into()));
+        self
+    }
+
+    /// Remove all previously added clinical modifiers.
+    pub fn clear_modifiers(mut self) -> Self {
+        self.modifiers.clear();
+        self
+    }
+
+    /// Add a curator record.
+    pub fn push_curator(mut self, curator: impl ToString) -> Self {
+        self.curators.push(curator.to_string());
+        self
+    }
+
+    /// Add several curators.
+    pub fn extend_curators(mut self, curators: impl IntoIterator<Item = impl ToString>) -> Self {
+        self.curators
+            .extend(curators.into_iter().map(|v| v.to_string()));
+        self
+    }
+
+    /// Clear previously added curators.
+    pub fn clear_curators(mut self) -> Self {
+        self.curators.clear();
+        self
+    }
+}
+
+impl HpoAnnotationBuilder<Set, Set, Set> {
+    /// Build the annotation.
+    ///
+    /// The build is infallible due to static checking in the builder.
+    pub fn build(mut self) -> HpoAnnotation {
+        let (disease_id, disease_name) = self
+            .disease
+            .expect("build is callable only after both disease ID and name are set to the builder");
+
+        self.annotation_references.sort_by(|l, r| {
+            l.term_id
+                .cmp(&r.term_id)
+                .then(l.evidence_code.cmp(&r.evidence_code))
+        });
+        self.modifiers.sort();
+        self.curators.sort();
+
+        HpoAnnotation {
+            disease_id,
+            disease_name,
+            is_negated: self.is_negated,
+            phenotype_term_id: self
+                .phenotype_term_id
+                .expect("Build is callable only after phenotype ID is set to the builder"),
+            annotation_references: self.annotation_references,
+            onset: self.onset,
+            frequency: self.frequency,
+            sex: self.sex,
+            modifiers: self.modifiers,
+            aspect: self
+                .aspect
+                .expect("Build is callable only after aspect is set to the builder"),
+            curators: self.curators,
+        }
+    }
 }
 
 /// The HPO annotation corpus with entries parsed to the highest level possible
