@@ -827,7 +827,7 @@ pub mod io {
     };
     use ontolius::{Prefix, TermIdParseError};
     use regex::Regex;
-    use std::collections::BTreeMap;
+    use std::collections::{HashMap, HashSet};
     use std::fmt::{Debug, Display};
     use std::io::{BufRead, Write};
     use std::sync::LazyLock;
@@ -983,7 +983,7 @@ pub mod io {
             W: Write,
         {
             // Comments
-            // #description: "HPO annotations for rare diseases [8362: OMIM; 47: DECIPHER; 4283 ORPHANET]"
+            // #description: "HPO annotations for rare diseases [8362: OMIM; 47: DECIPHER; 4283 ORPHA]"
             let disease_counts = count_diseases(&self.lines);
             write!(
                 &mut write,
@@ -1031,10 +1031,11 @@ pub mod io {
     }
 
     fn count_diseases(lines: &[HpoAnnotation]) -> Vec<(Prefix<'_>, u32)> {
-        let mut counts = BTreeMap::new();
+        let disease_ids: HashSet<_> = lines.iter().map(|ann| &ann.disease_id).collect();
 
-        for ann in lines {
-            *counts.entry(ann.disease_id.prefix()).or_default() += 1;
+        let mut counts = HashMap::new();
+        for disease_id in disease_ids {
+            *counts.entry(disease_id.prefix()).or_default() += 1;
         }
 
         counts.into_iter().collect()
@@ -1316,7 +1317,7 @@ pub mod io {
             assert_eq!(
                 &lines,
                 &[
-                    "#description: \"HPO annotations for rare diseases [4: OMIM; 4: ORPHA]\"",
+                    "#description: \"HPO annotations for rare diseases [1: OMIM; 1: ORPHA]\"",
                     "#version: 2025-05-06",
                     "#tracker: https://github.com/obophenotype/human-phenotype-ontology/issues",
                     "#hpo-version: https://purl.obolibrary.org/obo/hp/releases/2025-05-06/hp.json",
