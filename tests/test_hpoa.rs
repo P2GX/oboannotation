@@ -4,6 +4,7 @@ const FPATH_SMALL_HPOA: &str = "data/phenotype.real-shortlist.hpoa";
 mod hpo_annotation_parser {
     use super::FPATH_SMALL_HPOA;
     use oboannotation::hpo::FrequencyData;
+    use oboannotation::io::AnnotationWriter;
     use oboannotation::{hpo::HpoAnnotations, io::AnnotationLoader};
 
     #[test]
@@ -26,6 +27,47 @@ mod hpo_annotation_parser {
 
         let frequency_data = first.frequency.as_ref().unwrap().data();
         assert_eq!(frequency_data, &FrequencyData::Ratio { n: 29, m: 199 })
+    }
+
+    #[test]
+    fn write_hpoa_annotations() {
+        // Let's assume we obtain the annotations from somewhere.
+        let anns = HpoAnnotations::load_from_path(FPATH_SMALL_HPOA)
+            .expect("Sample data should be well formatted");
+
+        // We can write them in the HPOA format into a file ...
+        // let mut write = File::create("phenotype.new.hpoa").expect("We are allowed to write");
+        // ... or into a buffer (this case).
+        let mut write = vec![];
+        anns.store_to_write(&mut write)
+            .expect("Writing into a Vec should not fail");
+
+        let hpoa_lines: Vec<_> = std::str::from_utf8(&write)
+            .expect("HPOA should be a utf8 string")
+            .lines()
+            .collect();
+
+        // The first 5 HPOA lines should look roughly like this ...
+        assert_eq!(
+            &hpoa_lines[..5],
+            &[
+                "#description: \"HPO annotations for rare diseases [2: OMIM]\"",
+                "#version: 2023-04-05",
+                "#tracker: https://github.com/obophenotype/human-phenotype-ontology/issues",
+                "#hpo-version: https://purl.obolibrary.org/obo/hp/releases/2023-04-05/hp.json",
+                "database_id\tdisease_name\tqualifier\thpo_id\treference\tevidence\tonset\tfrequency\tsex\tmodifier\taspect\tbiocuration"
+            ]
+        );
+
+        // ... while the records look like:
+        assert_eq!(
+            &hpoa_lines[5..8],
+            &[
+                "OMIM:154700\tMarfan syndrome\t\tHP:0001377\tPMID:28050285;PMID:33436942\tPCS\t\t29/199\t\t\tP\tHPO:probinson[2021-05-27];HPO:probinson[2021-04-01]",
+                "OMIM:154700\tMarfan syndrome\t\tHP:0000486\tPMID:8172269\tPCS\t\t110/573\t\t\tP\tHPO:skoehler[2015-07-26];HPO:probinson[2020-08-03]",
+                "OMIM:154700\tMarfan syndrome\t\tHP:0005136\tOMIM:154700\tIEA\t\t\t\t\tP\tHPO:probinson[2012-04-24]"
+            ]
+        );
     }
 }
 
