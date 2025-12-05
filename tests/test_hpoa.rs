@@ -12,12 +12,12 @@ mod hpo_annotation_parser {
         let data = HpoAnnotations::load_from_path(FPATH_SMALL_HPOA)
             .expect("Sample data should be well formatted");
 
-        assert_eq!(data.version.as_str(), "2023-04-05");
-        assert_eq!(data.hpo_version.as_str(), "2023-04-05");
-        assert_eq!(data.lines.len(), 86);
+        assert_eq!(data.version(), "2023-04-05");
+        assert_eq!(data.hpo_version(), "2023-04-05");
+        assert_eq!(data.annotations().len(), 86);
 
         let first = data
-            .lines
+            .annotations()
             .first()
             .expect("We should have more than one line");
 

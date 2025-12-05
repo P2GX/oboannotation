@@ -22,7 +22,7 @@
 //! let data: HpoAnnotations = HpoAnnotations::load_from_path(fpath_hpoa)
 //!                                  .expect("Toy HPOA should be well formatted");
 //!
-//! assert_eq!(data.lines.len(), 86); // Toy HPOA includes 86 records
+//! assert_eq!(data.annotations().len(), 86); // Toy HPOA includes 86 records
 //! ```
 //!
 //! See [`HpoAnnotations`][`crate::hpo::HpoAnnotations`] and [`HpoAnnotation`][`crate::hpo::HpoAnnotation`]

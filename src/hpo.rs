@@ -808,10 +808,101 @@ impl HpoAnnotationBuilder<Set, Set, Set> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HpoAnnotations {
     /// The HPO annotation records.
-    pub lines: Vec<HpoAnnotation>,
+    lines: Vec<HpoAnnotation>,
     /// The HPOA version (e.g. `2023-04-05`)
-    pub version: String,
-    pub hpo_version: String,
+    version: String,
+    hpo_version: String,
+}
+
+impl HpoAnnotations {
+    /// Create builder for building the annotations.
+    pub fn builder() -> HpoAnnotationsBuilder<Unset, Unset> {
+        HpoAnnotationsBuilder {
+            lines: vec![],
+            version: None,
+            hpo_version: None,
+            state: PhantomData,
+        }
+    }
+
+    /// Get the HPO annotations
+    pub fn annotations(&self) -> &[HpoAnnotation] {
+        self.lines.as_slice()
+    }
+
+    /// Get HPO annotation version.
+    pub fn version(&self) -> &str {
+        self.version.as_str()
+    }
+
+    /// Get version of HPO used to build the annotations.
+    pub fn hpo_version(&self) -> &str {
+        self.hpo_version.as_str()
+    }
+}
+
+/// Builder for [`HpoAnnotations`].
+pub struct HpoAnnotationsBuilder<A, B> {
+    lines: Vec<HpoAnnotation>,
+    version: Option<String>,
+    hpo_version: Option<String>,
+    state: PhantomData<(A, B)>,
+}
+
+impl<A, B> HpoAnnotationsBuilder<A, B> {
+    /// Add an annotation.
+    pub fn add_annotation(mut self, annotation: impl Into<HpoAnnotation>) -> Self {
+        self.lines.push(annotation.into());
+        self
+    }
+
+    /// Add several annotations.
+    pub fn extend_annotations(
+        mut self,
+        annotations: impl IntoIterator<Item = HpoAnnotation>,
+    ) -> Self {
+        self.lines.extend(annotations);
+        self
+    }
+}
+
+impl<A> HpoAnnotationsBuilder<A, Unset> {
+    /// Indicate which HPO version was used to build the annotations.
+    pub fn hpo_version(self, hpo_version: impl Into<String>) -> HpoAnnotationsBuilder<A, Set> {
+        HpoAnnotationsBuilder {
+            lines: self.lines,
+            version: self.version,
+            hpo_version: Some(hpo_version.into()),
+            state: PhantomData,
+        }
+    }
+}
+
+impl<B> HpoAnnotationsBuilder<Unset, B> {
+    /// Set HPO annotation version.
+    pub fn hpoa_version(self, version: impl Into<String>) -> HpoAnnotationsBuilder<Set, B> {
+        HpoAnnotationsBuilder {
+            lines: self.lines,
+            version: Some(version.into()),
+            hpo_version: self.hpo_version,
+            state: PhantomData,
+        }
+    }
+}
+
+impl HpoAnnotationsBuilder<Set, Set> {
+    /// Build the HPO annotations.
+    pub fn build(self) -> HpoAnnotations {
+        HpoAnnotations {
+            lines: self.lines,
+            version: self
+                .version
+                .expect("Build can be called only after version is set"),
+            hpo_version: self
+                .hpo_version
+                .expect("Build can be called only after HPO version is set"),
+        }
+    }
 }
 
 /// Parse disease-phenotype annotations from HPO annotation file.
@@ -1065,13 +1156,13 @@ pub mod io {
     ///              .expect("The example data should be well formatted");
     ///
     /// // Loaded HPO annotations version `2023-04-05` ...
-    /// assert_eq!(data.version.as_str(), "2023-04-05");
+    /// assert_eq!(data.version(), "2023-04-05");
     ///
     /// // ... generated with HPO version `2023-04-05` ...
-    /// assert_eq!(data.hpo_version.as_str(), "2023-04-05");
+    /// assert_eq!(data.hpo_version(), "2023-04-05");
     ///
     /// // ... consisting of 86 lines.
-    /// assert_eq!(data.lines.len(), 86);
+    /// assert_eq!(data.annotations().len(), 86);
     /// ```
     impl AnnotationLoader<Hpoa> for HpoAnnotations {
         fn load_from_buf_read<R>(mut read: R) -> Result<HpoAnnotations, AnnotationLoadError>
