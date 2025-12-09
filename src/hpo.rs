@@ -1075,7 +1075,8 @@ pub mod io {
         {
             // Comments
             // #description: "HPO annotations for rare diseases [8362: OMIM; 47: DECIPHER; 4283 ORPHA]"
-            let disease_counts = count_diseases(&self.lines);
+            let mut disease_counts = count_diseases(&self.lines);
+            disease_counts.sort();
             write!(
                 &mut write,
                 "#description: \"HPO annotations for rare diseases"
