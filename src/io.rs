@@ -1,9 +1,9 @@
 //! Load ontology annotations.
+
 use std::fs::File;
 
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
-
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,28 +40,47 @@ pub enum AnnotationLoadError {
     Error(String),
 }
 
+pub trait AnnotationWriter<Fmt> {
+    type Err;
+    fn store_to_write<W>(self, write: W) -> Result<(), Self::Err>
+    where
+        W: Write;
+}
+
 /// Load annotations from path, [`Read`], or [`BufRead`].
 ///
 /// The loading is performed in a strict validation.
-pub trait AnnotationLoader<A> {
+pub trait AnnotationLoader<Fmt>: Sized {
     /// Load annotation from a file path.
-    fn load_from_path<P>(&self, path: P) -> Result<A, AnnotationLoadError>
+    fn load_from_path<P>(path: P) -> Result<Self, AnnotationLoadError>
     where
         P: AsRef<Path>,
     {
-        self.load_from_read(File::open(path)?)
+        Self::load_from_read(File::open(path)?)
     }
 
     /// Load annotation from a reader.
-    fn load_from_read<R>(&self, read: R) -> Result<A, AnnotationLoadError>
+    fn load_from_read<R>(read: R) -> Result<Self, AnnotationLoadError>
     where
         R: Read,
     {
-        self.load_from_buf_read(BufReader::new(read))
+        Self::load_from_buf_read(BufReader::new(read))
     }
 
     /// Load annotation from a buffered reader.
-    fn load_from_buf_read<R>(&self, read: R) -> Result<A, AnnotationLoadError>
+    fn load_from_buf_read<R>(read: R) -> Result<Self, AnnotationLoadError>
     where
         R: BufRead;
+}
+
+pub trait WriteAnnotation<Fmt> {
+    fn write_ann<W>(&self, w: &mut W) -> io::Result<()>
+    where
+        W: Write;
+}
+
+pub trait ReadAnnotation<Fmt>: Sized {
+    type Err;
+
+    fn read_str(val: &str) -> Result<Self, Self::Err>;
 }
